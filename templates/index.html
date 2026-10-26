@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GeoKurir Malang — Dashboard Evaluasi Clustering</title>
+
+  <!-- Leaflet CSS for Interactive Geographic Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <div class="app-container">
+
+    <!-- ====================================================================
+         Sidebar Navigation
+         ==================================================================== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <img src="assets/logo.png" alt="POS IND" class="brand-logo-img" onerror="this.style.display='none'">
+        <div class="brand-title">GeoKurir<span class="brand-accent">Malang</span></div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <!-- 1. Dashboard -->
+        <a class="nav-item active" data-view="dashboard" href="#dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+          <span>Dashboard</span>
+        </a>
+
+        <!-- 2. Upload Data -->
+        <a class="nav-item" data-view="upload" href="#upload">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span>Upload Data</span>
+        </a>
+
+        <!-- 3. Hasil Pembagian Zona -->
+        <a class="nav-item" data-view="zona" href="#zona">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
+            <line x1="8" y1="2" x2="8" y2="18"></line>
+            <line x1="16" y1="6" x2="16" y2="22"></line>
+          </svg>
+          <span>Hasil Pembagian Zona</span>
+        </a>
+
+        <!-- 4. Evaluasi -->
+        <a class="nav-item" data-view="evaluasi" href="#evaluasi">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+          <span>Evaluasi</span>
+        </a>
+
+        <a class="nav-item" data-view="hapus-dataset" href="#hapus-dataset">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 6h18M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M5 6l1 14h12l1-14M10 10v6M14 10v6"></path>
+          </svg>
+          <span>Manage Dataset</span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- ====================================================================
+         Main Workspace Wrapper
+         ==================================================================== -->
+    <div class="main-wrapper">
+
+      <!-- Top Header Bar -->
+      <header class="top-navbar">
+        <div class="top-navbar-left">
+          <button class="mobile-menu-toggle" id="mobile-toggle" aria-label="Toggle Navigation">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <div class="top-navbar-right">
+  <div class="user-profile-menu">
+    <div class="user-avatar-circle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+      </svg>
+    </div>
+    <span class="user-name">User</span>
+  </div>
+</div>
+      </header>
+
+      <!-- Main Body Container -->
+      <main class="content-body">
+
+        <!-- ================================================================
+             VIEW 1: DASHBOARD (image 6.png)
+             ================================================================ -->
+        <section class="view-page active" id="view-dashboard">
+          <div class="page-header-row">
+            <div>
+              <h1 class="page-title">Dashboard</h1>
+              <p class="page-subtitle">Ringkasan hasil proses pembagian zona pengantaran menggunakan K-Means dan HBCDP.</p>
+            </div>
+            <div class="header-action-control">
+              <div class="filter-group">
+                <label for="select-process-dashboard">Pilih Hasil Proses</label>
+                <select id="select-process-dashboard" class="select-custom">
+                  <option value="none">-- Belum ada dataset (Silakan unggah) --</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Top KPI Cards -->
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-icon-wrap">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                </svg>
+              </div>
+              <div class="kpi-content">
+                <span class="kpi-label">Jumlah Titik</span>
+                <span class="kpi-value" id="kpi-jumlah-titik">-</span>
+              </div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-icon-wrap">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="5" r="3"></circle>
+                  <circle cx="6" cy="17" r="3"></circle>
+                  <circle cx="18" cy="17" r="3"></circle>
+                  <line x1="10" y1="7" x2="7.5" y2="14.5"></line>
+                  <line x1="14" y1="7" x2="16.5" y2="14.5"></line>
+                </svg>
+              </div>
+              <div class="kpi-content">
+                <span class="kpi-label">Jumlah Cluster (K)</span>
+                <span class="kpi-value" id="kpi-jumlah-cluster">-</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dual Maps Grid -->
+          <div class="dual-col-grid">
+            <!-- Left Map: K-Means Awal -->
+            <div class="dashboard-card">
+              <h2 class="card-title">Hasil K-Means Awal</h2>
+              <div class="map-frame-box">
+                <div id="map-kmeans-dash" class="map-element"></div>
+                
+<div class="map-legend-overlay">
+  <div class="map-legend-title">Legenda</div>
+  <ul class="legend-list">
+    <li class="legend-item">
+      <span class="legend-symbol circle-dot"></span>
+      Titik pengiriman
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol hub-home">
+        <svg viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        </svg>
+      </span>
+      KCU Pos Malang
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol cluster-outline"></span>
+      Cluster
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol line-dash"></span>
+      Batas wilayah (Convex Hull)
+    </li>
+  </ul>
+</div>
+
+              </div>
+            </div>
+
+            <!-- Right Map: HBCDP Hasil Akhir -->
+            <div class="dashboard-card">
+              <h2 class="card-title">Hasil HBCDP (Hasil Akhir)</h2>
+              <div class="map-frame-box">
+                <div id="map-hbcdp-dash" class="map-element"></div>
+               
+<div class="map-legend-overlay">
+  <div class="map-legend-title">Legenda</div>
+  <ul class="legend-list">
+    <li class="legend-item">
+      <span class="legend-symbol circle-dot"></span>
+      Titik pengiriman
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol hub-home">
+        <svg viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        </svg>
+      </span>
+      KCU Pos Malang
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol cluster-outline"></span>
+      Cluster
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol line-dash"></span>
+      Batas wilayah (Convex Hull)
+    </li>
+  </ul>
+</div>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- Dual Summary Tables Grid -->
+          <div class="dual-col-grid">
+            <!-- Left Table: Ringkasan Hasil Evaluasi -->
+            <div class="dashboard-card">
+              <h2 class="card-title" style="margin-bottom: 12px;">Ringkasan Hasil Evaluasi</h2>
+              <div class="table-responsive">
+                <table class="table-custom">
+                  <thead>
+                    <tr>
+                      <th>Parameter</th>
+                      <th style="text-align: center;">K-Means Awal</th>
+                      <th style="text-align: center;">HBCDP (Hasil Akhir)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Silhouette Score</td>
+                      <td style="text-align: center;" id="eval-km-silhouette">-</td>
+                      <td style="text-align: center;" id="eval-hb-silhouette">-</td>
+                    </tr>
+                    <tr>
+                      <td>Davies-Bouldin Index (DBI)</td>
+                      <td style="text-align: center;" id="eval-km-dbi">-</td>
+                      <td style="text-align: center;" id="eval-hb-dbi">-</td>
+                    </tr>
+                    <tr>
+                      <td>Z₁</td>
+                      <td style="text-align: center;" id="eval-km-z1">-</td>
+                      <td style="text-align: center;" id="eval-hb-z1">-</td>
+                    </tr>
+                    <tr>
+                      <td>Z₂</td>
+                      <td style="text-align: center;" id="eval-km-z2">-</td>
+                      <td style="text-align: center;" id="eval-hb-z2">-</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Right Table: Jumlah Anggota Cluster -->
+            <div class="dashboard-card">
+              <h2 class="card-title" style="margin-bottom: 12px;">Jumlah Anggota Cluster</h2>
+              <div class="table-responsive">
+                <table class="table-custom">
+                  <thead>
+                    <tr>
+                      <th>Cluster</th>
+                      <th style="text-align: center;">K-Means Awal</th>
+                      <th style="text-align: center;">HBCDP (Hasil Akhir)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="table-cluster-distribution-body">
+                    <tr><td colspan="3" style="text-align: center; color: #64748b; padding: 24px;">Belum ada data cluster. Silakan unggah dataset.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW 2: UPLOAD DATA (image 1.png)
+             ================================================================ -->
+        <section class="view-page" id="view-upload">
+          <div class="page-header-row">
+            <div>
+              <h1 class="page-title">Upload Data</h1>
+              <p class="page-subtitle">Unggah dataset pengiriman untuk diproses. Pastikan menggunakan format template yang telah disediakan.</p>
+            </div>
+          </div>
+
+          <!-- Card 1: Template Data -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Template Data</h2>
+            <div class="template-card-grid">
+              <div>
+                <p class="card-subtitle">Unduh template berikut untuk mengetahui format dan struktur data yang sesuai dengan sistem.</p>
+                <div class="template-actions">
+                  <button class="btn btn-secondary" id="btn-download-excel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Unduh Template Excel
+                  </button>
+                  <button class="btn btn-secondary" id="btn-download-csv">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Unduh Template CSV
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div class="card-subtitle" style="font-weight: 600; margin-bottom: 6px;">Kolom pada template:</div>
+                <div class="table-responsive">
+                  <table class="table-custom">
+                    <thead>
+                      <tr>
+                        <th style="width: 40px; text-align: center;">No.</th>
+                        <th>Nosi</th>
+                        <th>Tgl Antaran Pertama</th>
+                        <th>Alamat</th>
+                        <th>Kota</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style="text-align: center;">1</td>
+                        <td>nosi_1</td>
+                        <td>2025-08-01</td>
+                        <td>Jl. Contoh No. 1</td>
+                        <td>Malang</td>
+                      </tr>
+                      <tr>
+                        <td style="text-align: center;">2</td>
+                        <td>nosi_2</td>
+                        <td>2025-08-01</td>
+                        <td>Jl. Contoh No. 2</td>
+                        <td>Malang</td>
+                      </tr>
+                      <tr>
+                        <td style="text-align: center;">3</td>
+                        <td>nosi_3</td>
+                        <td>2025-08-01</td>
+                        <td>Jl. Contoh No. 3</td>
+                        <td>Malang</td>
+                      </tr>
+                      <tr>
+                        <td style="text-align: center;">4</td>
+                        <td>nosi_4</td>
+                        <td>2025-08-01</td>
+                        <td>Jl. Contoh No. 4</td>
+                        <td>Malang</td>
+                      </tr>
+                      <tr>
+                        <td style="text-align: center;">5</td>
+                        <td>nosi_5</td>
+                        <td>2025-08-01</td>
+                        <td>Jl. Contoh No. 5</td>
+                        <td>Malang</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Unggah Dataset Pengiriman -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Unggah Dataset Pengiriman</h2>
+            <p class="card-subtitle">Pilih file dataset pengiriman dalam format .xlsx, .xls, atau .csv (satu file untuk satu tanggal/batch pengiriman).</p>
+
+            <div class="upload-dropzone-grid">
+              <!-- Dropzone Left -->
+              <div class="dropzone-box" id="upload-dropzone">
+                <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display: none;">
+                <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                <div class="dropzone-text">Drag and drop file di sini atau</div>
+                <button type="button" class="btn btn-primary" id="btn-select-file">Pilih File</button>
+                <div class="dropzone-sub">Format: .xlsx, .xls, .csv</div>
+              </div>
+
+              <!-- Selected File Right -->
+              <div class="selected-file-card" id="selected-file-card" style="display: none;">
+                <div class="selected-file-title">File yang dipilih:</div>
+                <div class="file-preview-pill">
+                  <div class="file-preview-info">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                    </svg>
+                    <div>
+                      <div class="file-name-text" id="selected-file-name">-</div>
+                      <div class="file-meta-text" id="selected-file-meta">-</div>
+                    </div>
+                  </div>
+                  <button type="button" class="btn-remove-file" id="btn-remove-file" title="Hapus file">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+
+<!-- Card 3: Proses Preprocessing -->
+<div class="dashboard-card" id="preprocessing-card">
+
+  <div class="dashboard-card-header">
+    <h2 class="card-title">Proses Preprocessing</h2>
+
+    <span id="preprocessing-status" style="color: #64748b; font-weight: 600;">Belum diproses</span>
+  </div>
+
+  <div class="progress-container">
+    <div class="progress-bar-track">
+      <div
+        class="progress-bar-fill"
+        id="preprocessing-progress-fill"
+        style="width: 0%; background: #263e6b;">
+      </div>
+    </div>
+  </div>
+
+  <div class="metrics-row-grid"
+     style="margin-top: 24px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap;">
+
+    <div class="metric-kpi-box" style="flex: 1 1 250px; max-width: 350px;">
+      <div class="metric-kpi-value" id="preprocessing-total-awal">0</div>
+      <div class="metric-kpi-title">Data awal</div>
+    </div>
+
+    <div class="metric-kpi-box" style="flex: 1 1 250px; max-width: 350px;">
+      <div class="metric-kpi-value" id="preprocessing-total-eliminasi">0</div>
+      <div class="metric-kpi-title">Data tereliminasi</div>
+    </div>
+
+    <div class="metric-kpi-box" style="flex: 1 1 250px; max-width: 350px;">
+      <div class="metric-kpi-value" id="preprocessing-jumlah-valid">0</div>
+      <div class="metric-kpi-title">Data valid</div>
+    </div>
+
+  </div>
+
+  <p class="card-subtitle" id="preprocessing-summary" style="margin-top: 20px;">
+    Belum ada hasil preprocessing.
+  </p>
+
+</div>
+
+          <!-- Card 4 : Proses Geocoding -->
+<div class="dashboard-card">
+    <div class="dashboard-card-header">
+        <h2 class="card-title">Proses Geocoding</h2>
+        <span id="geocoding-status"
+              style="color: #64748b; font-weight: 600;">
+            Belum diproses
+        </span>
+    </div>
+            <div class="progress-container">
+              <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
+              </div>
+              <div class="progress-meta-row">
+                <span id="progress-text-label">Belum ada proses geocoding</span>
+                <span class="progress-percent-text" id="progress-percent-text">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 5 : Parameter Pemodelan -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Parameter Pemodelan</h2>
+            <p class="card-subtitle">Setelah proses geocoding selesai, tentukan jumlah cluster untuk proses clustering.</p>
+            <div class="parameter-row">
+              <div class="parameter-input-group">
+                <label for="input-cluster-k">Jumlah Cluster (K)</label>
+                <input type="number" id="input-cluster-k" class="input-text" value="5" min="2" step="1">
+              </div>
+              <button class="btn btn-accent" id="btn-start-clustering">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+                Mulai Clustering
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW 3: HASIL PEMBAGIAN ZONA (image 2.png & image 5.png)
+             ================================================================ -->
+        <section class="view-page" id="view-zona">
+          <div class="page-header-row">
+            <div>
+              <h1 class="page-title">Hasil Pembagian Zona</h1>
+              <p class="page-subtitle">Visualisasi hasil clustering dan pembagian zona pengantaran berdasarkan K-Means awal dan HBCDP.</p>
+            </div>
+          </div>
+
+          <!-- Tab Switcher -->
+          <div class="btn-pill-group">
+            <button class="btn-tab active" id="tab-kmeans">K-Means Awal</button>
+            <button class="btn-tab" id="tab-hbcdp">HBCDP (Hasil Akhir)</button>
+          </div>
+
+          <!-- Main Grid: Left Map + Right Summaries -->
+          <div class="zona-layout-grid">
+            <!-- Left: Big Map -->
+            <div class="dashboard-card">
+              <h2 class="card-title" id="zona-map-title">Visualisasi Zona - K-Means Awal</h2>
+              <div class="map-frame-box zona-map-frame">
+                <div id="map-zona-large" class="map-element"></div>
+                
+<div class="map-legend-overlay">
+  <div class="map-legend-title">Legenda</div>
+  <ul class="legend-list">
+    <li class="legend-item">
+      <span class="legend-symbol circle-dot"></span>
+      Titik pengiriman
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol hub-home">
+        <svg viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        </svg>
+      </span>
+      KCU Pos Malang
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol cluster-outline"></span>
+      Cluster
+    </li>
+    <li class="legend-item">
+      <span class="legend-symbol line-dash"></span>
+      Batas wilayah (Convex Hull)
+    </li>
+  </ul>
+</div>
+
+              </div>
+            </div>
+
+            <!-- Right Column -->
+            <div class="zona-right-column">
+              <!-- Top: Ringkasan Jumlah Titik -->
+              <div class="dashboard-card">
+                <h2 class="card-title" id="zona-summary-title">Ringkasan Jumlah Titik per Cluster (K-Means Awal)</h2>
+                <div class="table-responsive">
+                  <table class="table-custom">
+                    <thead>
+                      <tr>
+                        <th>Cluster</th>
+                        <th style="text-align: center;">Jumlah Titik</th>
+                      </tr>
+                    </thead>
+                    <tbody id="table-zona-summary-body">
+                      <tr><td colspan="2" style="text-align: center; color: #64748b; padding: 20px;">Belum ada data zona</td></tr>
+                    </tbody>
+                    <tfoot>
+                      <tr class="total-row">
+                        <td>Total</td>
+                        <td style="text-align: center;" id="table-zona-total-count">-</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Bottom: Rincian Anggota Cluster -->
+              <div class="dashboard-card">
+                <div class="dashboard-card-header">
+                  <h2 class="card-title">Rincian Anggota Cluster</h2>
+                  <div class="search-input-wrap">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="search-resi-alamat" class="input-text" placeholder="Cari alamat / no resi...">
+                  </div>
+                </div>
+
+                <div class="table-responsive">
+                  <table class="table-custom">
+                    <thead>
+                      <tr>
+                        <th style="width: 40px; text-align: center;">No.</th>
+                        <th>No Resi</th>
+                        <th>Alamat</th>
+                        <th style="text-align: center;">Cluster</th>
+                      </tr>
+                    </thead>
+                    <tbody id="table-anggota-body">
+                      <tr><td colspan="4" style="text-align: center; color: #64748b; padding: 20px;">Belum ada data titik pengiriman</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="pagination-footer">
+                  <span id="pagination-info">Menampilkan 0 data</span>
+                  <div class="pagination-controls" id="pagination-controls">
+                    <!-- Dynamic page buttons -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Action Bar -->
+          <div class="bottom-action-bar">
+            <button class="btn btn-primary" id="btn-download-result-csv">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Unduh Hasil CSV
+            </button>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW 4: EVALUASI (image 4.png)
+             ================================================================ -->
+        <section class="view-page" id="view-evaluasi">
+          <div class="page-header-row">
+            <div>
+              <h1 class="page-title">Evaluasi Clustering</h1>
+            </div>
+          </div>
+
+          <!-- Card 1: Evaluasi K-Means Awal -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Evaluasi K-Means Awal</h2>
+            <div class="metrics-row-grid">
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Silhouette Score</div>
+                <div class="metric-kpi-value" id="card-eval-km-silhouette">-</div>
+              </div>
+
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Davies-Bouldin Index (DBI)</div>
+                <div class="metric-kpi-value" id="card-eval-km-dbi">-</div>
+              </div>
+
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Z₁</div>
+                <div class="metric-kpi-value" id="card-eval-km-z1">-</div>
+              </div>
+
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Z₂</div>
+                <div class="metric-kpi-value" id="card-eval-km-z2">-</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Evaluasi Setiap Tahap HBCDP -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Evaluasi Setiap Tahap HBCDP</h2>
+            <div class="table-responsive">
+              <table class="table-custom">
+                <thead>
+                  <tr>
+                    <th>Tahap</th>
+                    <th style="text-align: center;">Jumlah Anggota Cluster</th>
+                    <th style="text-align: center;">Z₁</th>
+                    <th style="text-align: center;">Z₂</th>
+                    <th style="text-align: center;">Jumlah Titik yang Direassignment</th>
+                  </tr>
+                </thead>
+                <tbody id="table-eval-steps-body">
+                  <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Belum ada riwayat iterasi penyeimbangan beban kurir</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Card 3: Evaluasi Hasil Akhir -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Evaluasi Hasil Akhir</h2>
+            <div class="metrics-row-grid">
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Silhouette Score</div>
+                <div class="metric-kpi-value" id="card-eval-hb-silhouette">-</div>
+              </div>
+
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Davies-Bouldin Index (DBI)</div>
+                <div class="metric-kpi-value" id="card-eval-hb-dbi">-</div>
+              </div>
+
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Z₁</div>
+                <div class="metric-kpi-value" id="card-eval-hb-z1">-</div>
+              </div>
+
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-title">Z₂</div>
+                <div class="metric-kpi-value" id="card-eval-hb-z2">-</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view-page" id="view-hapus-dataset">
+          <div class="page-header-row">
+            <div>
+              <h1 class="page-title">Manage Dataset</h1>
+              <p class="page-subtitle">Kelola semua dataset yang muncul pada Pilih Hasil Proses, termasuk yang belum diproses.</p>
+            </div>
+            <button type="button" class="btn btn-secondary" id="btn-refresh-delete-datasets">Muat ulang</button>
+          </div>
+
+          <div class="delete-dataset-notice">
+            Menghapus dataset juga menghapus semua titik pengiriman, hasil clustering,
+            evaluasi, zona kurir, dan riwayat prosesnya. Penghapusan bersifat permanen.
+          </div>
+
+          <div class="dashboard-card">
+            <div class="delete-dataset-toolbar">
+              <h2 class="card-title">Semua dataset tersimpan</h2>
+              <div class="filter-group">
+                <label for="search-delete-dataset">Cari nama file</label>
+                <input type="search" id="search-delete-dataset" class="select-custom" placeholder="Cari dataset…">
+              </div>
+            </div>
+            <div class="delete-dataset-selection">
+              <span id="delete-dataset-selection-count" role="status" aria-live="polite">0 dataset dipilih</span>
+              <button type="button" class="btn btn-danger" id="btn-delete-selected-datasets" disabled>Hapus terpilih</button>
+            </div>
+            <p class="page-subtitle delete-dataset-selection-hint">Centang dataset yang ingin dihapus. Pilih semua hanya berlaku untuk dataset yang ditampilkan; pilihan tetap tersimpan saat mencari.</p>
+            <p id="delete-dataset-status" class="page-subtitle" role="status" aria-live="polite">Memuat daftar dataset…</p>
+            <div class="table-responsive">
+              <table class="table-custom delete-dataset-table">
+                <thead>
+                  <tr>
+                    <th scope="col" class="delete-dataset-checkbox-cell"><input type="checkbox" id="select-all-delete-datasets" aria-label="Pilih semua dataset yang ditampilkan" disabled></th>
+                    <th scope="col">Nama file</th>
+                    <th scope="col">Tanggal data</th>
+                    <th scope="col">Jumlah titik</th>
+                    <th scope="col">Terakhir diproses</th>
+                    <th scope="col">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="table-delete-datasets-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Google Maps Platform API Key Injection from Flask Environment -->
+  <script>
+    window.GOOGLE_MAPS_API_KEY = "{{ google_maps_api_key or '' }}";
+  </script>
+
+  <!-- Leaflet JS Library for Interactive Maps -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- SheetJS Library for Native Excel (.xlsx) Generation -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- Application Scripts -->
+  <script src="js/data.js"></script>
+  <script src="js/clustering.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>
