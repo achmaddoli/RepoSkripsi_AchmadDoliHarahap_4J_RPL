@@ -3,11 +3,6 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 
 class KMeansService:
-    """
-    KMeansService berdasarkan Class Diagram & Notebook 17_Oktober_2026.ipynb
-    Menangani clustering K-Means awal (scikit-learn KMeans++), perhitungan centroid,
-    serta evaluasi metrik cluster (Silhouette Score, Davies-Bouldin Index, Z1).
-    """
     def __init__(self, random_state: int = 42):
         self.random_state = random_state
 
@@ -17,7 +12,7 @@ class KMeansService:
         x2, y2 = p2[0], p2[1]
         return float(np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2))
 
-    def clustering(self, points, k: int = 5):
+    def clustering(self, points, k: int):
         """
         Menjalankan algoritma K-Means clustering (KMeans++).
         points: list of tuple/list [(x1, y1), (x2, y2), ...] dalam meter
@@ -58,7 +53,7 @@ class KMeansService:
         pts = np.asarray(points, dtype=float)
         return [round(float(pts[:, 0].mean()), 2), round(float(pts[:, 1].mean()), 2)]
 
-    def evaluasiCluster(self, points, labels, centroids, k: int = 5):
+    def evaluasiCluster(self, points, labels, centroids, k: int):
         """
         Evaluasi metrik cluster sesuai formula Bab II & Bab III notebook:
         - Silhouette Score (Persamaan 2.33)

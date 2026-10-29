@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
     tableCurrentPage: 1,
     tablePageSize: 5,
     geocodingProgress: 0,
-    clusterK: 5,
     currentDbDatasetId: null,
     datasets: [],
     deletingDatasetIds: new Set(),
@@ -453,7 +452,7 @@ function updateClusteringButtonState() {
     try {
       const [detailRes, pointsRes] = await Promise.all([
         fetch(`/api/dataset/${id_dataset}`),
-        fetch(`/api/dataset/${id_dataset}/points?limit=200`)
+        fetch(`/api/dataset/${id_dataset}/points`)
       ]);
 
       const detailJson = await detailRes.json();
@@ -972,11 +971,18 @@ const cMeta = cId != null ? getClusterMetadata(cId) : null;
   }
 
   if (fileInput) {
-    fileInput.addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) handleFileSelected(file);
-    });
-  }
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+
+    // Reset nilai input agar file yang sama
+    // dapat dipilih dan diproses kembali
+    e.target.value = '';
+
+    if (file) {
+      handleFileSelected(file);
+    }
+  });
+}
 
   if (dropzone) {
     ['dragenter', 'dragover'].forEach(eventName => {
@@ -1023,15 +1029,25 @@ function tampilkanHasilPreprocessing(data) {
   if (jumlahValid) jumlahValid.textContent = GeoUtils.formatNumber(valid);
 
   if (summary) {
+  if (valid === 0) {
+    summary.textContent =
+      `Seluruh ${GeoUtils.formatNumber(awal)} baris data tereliminasi ` +
+      `pada tahap preprocessing. Tidak ada data yang dapat ` +
+      `dilanjutkan ke proses geocoding.`;
+  } else {
     summary.textContent =
       `${GeoUtils.formatNumber(valid)} dari ${GeoUtils.formatNumber(awal)} baris data ` +
       `memenuhi kriteria preprocessing dan dilanjutkan ke tahap geocoding.`;
   }
+}
 
-  if (status) {
-    status.textContent = '✓ Selesai';
-    status.style.color = '#16a34a';
-  }
+if (status) {
+  status.textContent =
+    valid === 0 ? 'Selesai — tidak ada data valid' : '✓ Selesai';
+
+  status.style.color =
+    valid === 0 ? '#d97706' : '#16a34a';
+}
 
   if (progressFill) {
     progressFill.style.width = '100%';
@@ -1107,12 +1123,21 @@ if (!validExtensions.includes(fileExt)) {
 }
 
     // Dataset baru belum siap untuk clustering
-    state.uploadStatus = 'uploading';
-    state.readyDatasetId = null;
-    state.geocodedPointCount = 0;
-    updateClusteringButtonState();
+state.uploadStatus = 'uploading';
+state.readyDatasetId = null;
+state.geocodedPointCount = 0;
+updateClusteringButtonState();
 
-    resetGeocodingProgress();
+// Reset tampilan proses dataset sebelumnya
+resetPreprocessing();
+resetGeocodingProgress();
+
+const geocodingStatus = document.getElementById('geocoding-status');
+
+if (geocodingStatus) {
+  geocodingStatus.textContent = 'Belum diproses';
+  geocodingStatus.style.color = '#64748b';
+}
     if (selectedFileName) selectedFileName.textContent = fileName;
     const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
     if (selectedFileMeta) selectedFileMeta.textContent = `Memproses • ${sizeMb.replace('.', ',')} MB`;
@@ -1130,6 +1155,37 @@ if (!validExtensions.includes(fileExt)) {
         });
         const res = await resp.json();
         if (res.success) {
+
+  // Preprocessing selesai, tetapi seluruh data tereliminasi.
+  if (res.preprocessing_only === true) {
+    state.currentDbDatasetId = null;
+    state.readyDatasetId = null;
+    state.geocodedPointCount = 0;
+    state.uploadStatus = 'idle';
+
+    if (selectedFileMeta) {
+      selectedFileMeta.textContent =
+        `${GeoUtils.formatNumber(res.data.total_awal)} baris • ${sizeMb.replace('.', ',')} MB`;
+    }
+
+    tampilkanHasilPreprocessing(res.data);
+    resetGeocodingProgress();
+
+    const geocodingStatus = document.getElementById('geocoding-status');
+
+    if (geocodingStatus) {
+      geocodingStatus.textContent = 'Belum diproses';
+      geocodingStatus.style.color = '#64748b';
+    }
+
+    updateClusteringButtonState();
+
+    showToast(res.message);
+
+    return;
+  }
+
+  // Alur normal: dataset memiliki data valid.
   state.currentDbDatasetId = res.data.id_dataset;
 
   if (selectedFileMeta) {
@@ -1415,13 +1471,12 @@ if (btnStartClustering) {
       kVal >= state.geocodedPointCount
     ) {
       showToast(
-        `Jumlah cluster (K) harus bilangan bulat antara 2 dan ${state.geocodedPointCount - 1}.`,
+        `Jumlah Kurir (K) harus bilangan bulat antara 2 dan ${state.geocodedPointCount - 1}.`,
         'error'
       );
       return;
     }
 
-    state.clusterK = kVal;
     state.isClustering = true;
 
     updateClusteringButtonState();

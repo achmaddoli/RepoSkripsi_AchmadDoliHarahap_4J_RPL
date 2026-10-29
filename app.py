@@ -324,8 +324,6 @@ def get_dataset_points(id_dataset):
     """
     try:
         search = request.args.get("search", "").strip()
-        limit = int(request.args.get("limit", 200))
-        offset = int(request.args.get("offset", 0))
 
         # Periksa apakah dataset sudah memiliki hasil clustering
         hc_latest = query_db(
@@ -385,11 +383,18 @@ def get_dataset_points(id_dataset):
             sql += " AND (dp.alamat_asli ILIKE %s OR dp.alamat_bersih ILIKE %s)"
             params.extend([f"%{search}%", f"%{search}%"])
 
-        sql += " ORDER BY dp.id_pengiriman ASC LIMIT %s OFFSET %s;"
-        params.extend([limit, offset])
+
+        # Ambil seluruh titik pengiriman untuk ditampilkan pada peta
+        sql += " ORDER BY dp.id_pengiriman ASC;"
 
         points = query_db(sql, params)
-        return jsonify({"success": True, "data": points, "count": len(points)})
+        return jsonify({
+            "success": True,
+            "data": points,
+            "count": len(points)
+        })
+
+
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -631,14 +636,6 @@ def upload_dataset():
                 (resi, alamat, r.get(tgl_col, "") if tgl_col else "")
             )
 
-
-        if not valid_rows:
-            return jsonify({
-                "success": False,
-                "error": "Tidak ada baris data valid yang lolos preprocessing (semua baris kosong, duplikat, atau alamat tidak spesifik)."
-            }), 400
-
-
         # ============================================================
         # REKAPITULASI HASIL PREPROCESSING
         # ============================================================
@@ -664,6 +661,31 @@ def upload_dataset():
             }), 500
 
 
+        # Seluruh data tereliminasi: preprocessing selesai,
+        # tetapi tidak ada data yang dapat dilanjutkan.
+        if jumlah_data == 0:
+            return jsonify({
+                "success": True,
+                "preprocessing_only": True,
+                "message": (
+                    f"Preprocessing selesai. Seluruh {total_awal} data "
+                    "tereliminasi sehingga tidak ada data yang dapat "
+                    "dilanjutkan ke proses geocoding."
+                ),
+                "data": {
+                    "id_dataset": None,
+                    "nama_file": filename,
+                    "tanggal_data": tanggal_data,
+                    "total_awal": total_awal,
+                    "jumlah_data": 0,
+                    "eliminasi_wilayah": wilayah_count,
+                    "eliminasi_kosong": empty_count,
+                    "eliminasi_duplikat": dup_count,
+                    "eliminasi_alamat_umum": umum_count,
+                    "total_eliminasi": total_eliminasi,
+                    "dieliminasi": total_eliminasi
+                }
+            }), 200
         
         ds_insert_sql = """
             INSERT INTO dataset (
@@ -988,7 +1010,30 @@ def run_clustering(id_dataset):
     """
     try:
         req_data = request.get_json(silent=True) or {}
-        k = int(req_data.get("k", 5))
+
+        # Validasi input jumlah kurir (K)
+        raw_k = req_data.get("k")
+
+        if isinstance(raw_k, bool):
+            return jsonify({
+                "success": False,
+                "error": "Jumlah kurir (K) harus berupa bilangan bulat."
+            }), 400
+
+        try:
+            if isinstance(raw_k, float) and not raw_k.is_integer():
+                raise ValueError
+
+            if isinstance(raw_k, str) and not raw_k.strip().isdigit():
+                raise ValueError
+
+            k = int(raw_k)
+
+        except (TypeError, ValueError):
+            return jsonify({
+                "success": False,
+                "error": "Jumlah kurir (K) wajib diisi dengan bilangan bulat."
+            }), 400
 
         # Pengaturan batas data geocoding: None = seluruh data, angka = batasi N titik
         # Pengaturan batas data geocoding: Diambil default dari Config.GEOCODING_LIMIT (dari .env)
