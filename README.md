@@ -1,786 +1,245 @@
-# 📦 Spatial Package Delivery Zone Clustering Using Balanced K-Means
-
-## Baseline aktual PT Pos dan deployment terpisah
-
-Jalankan dari root proyek:
-
-```sh
-docker compose up -d --build
-docker compose exec -T web python migrate.py up
-docker compose exec -T web python migrate.py status
-docker compose exec -T -e GEOKURIR_INTEGRATION_TESTS=1 web python -m unittest discover -s tests -v
-```
-
-Compose memakai proyek `geokurir-actual`, website `http://127.0.0.1:5001`,
-PostgreSQL host port `5433`, dan Adminer `http://127.0.0.1:8081`.
-Volume `geokurir-actual_postgres_data` terpisah dari deployment lain.
-Container web menjalankan migrasi `up` sebelum aplikasi mulai. Migrasi ini
-menambah struktur tanpa menghapus dataset; jangan gunakan `fresh` untuk upgrade.
-Isi kunci Google Maps sendiri melalui `.env` untuk geocoding alamat baru.
-Tidak ada kunci atau data dari deployment lain yang disalin otomatis.
-
-Kolom **Petugas** opsional pada CSV/XLSX/XLS. Preprocessing mempertahankan
-Petugas bersama resinya. Setelah geocoding, sistem menghitung dan menyimpan
-baseline dalam `evaluasi_aktual`, lalu menampilkannya di halaman Upload **sebelum**
-tombol Mulai Clustering. Baseline juga tampil pada Dashboard, tab zona Aktual PT
-Pos, dan halaman Evaluasi. Ekspor menambahkan kolom **Petugas Aktual**.
-
-K tetap manual dan boleh berbeda dari jumlah kurir aktual. K-Means++ dan HBCDP
-memakai seluruh titik berhasil geocoding. Perbandingan Silhouette/DBI/Z₁ memakai
-resi ber-Petugas yang sama, menggunakan label hasil algoritma tanpa clustering
-ulang. Jika tidak ada Petugas, aktual menjadi N/A dan algoritma tetap berjalan
-pada seluruh titik. Z₂ dan riwayat tahap HBCDP tetap diagnostik seluruh titik.
-
-`services/actual_evaluation_service.py` menghitung metrik dalam koordinat meter.
-Z₁ adalah variansi populasi jumlah titik per kelompok. Nama Petugas dirapikan
-spasinya tetapi tetap peka huruf besar/kecil. Metrik tidak terdefinisi disimpan
-sebagai NULL dengan alasan, bukan nol; satu kurir masih dapat memiliki Z₁ = 0.
-Sidik data mendeteksi perubahan titik/Petugas: selesaikan geocoding lagi untuk
-memperbarui baseline. Perubahan K saja tidak menghitung ulang aktual.
-Timer hanya mencakup K-Means++ sampai HBCDP selesai.
-
+# 📦 GeoKurir Malang — Spatial Package Delivery Zone Clustering Using K-Means++ and HBCDP
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Field-Machine_Learning-blue?style=for-the-badge" alt="Machine Learning">
-  <img src="https://img.shields.io/badge/Method-Balanced_K--Means-orange?style=for-the-badge" alt="Balanced K-Means">
-  <img src="https://img.shields.io/badge/Domain-Geospatial_Analytics-green?style=for-the-badge" alt="Geospatial Analytics">
+  <img src="https://img.shields.io/badge/Field-Machine_Learning-blue?style=for-the-badge" alt="Field">
+  <img src="https://img.shields.io/badge/Method-K--Means%2B%2B_%26_HBCDP-orange?style=for-the-badge" alt="Method">
+  <img src="https://img.shields.io/badge/Framework-Flask-lightgrey?style=for-the-badge&logo=flask" alt="Framework">
+  <img src="https://img.shields.io/badge/Database-PostgreSQL-316192?style=for-the-badge&logo=postgresql" alt="Database">
 </p>
 
 ## 🧠 Why I Built This
 
-Last-mile delivery is not only about assigning packages to couriers — it is also about ensuring that each courier receives a geographically reasonable and balanced delivery area.
+Last-mile parcel delivery is not only about assigning packages to couriers — in reality, **uneven parcel distributions and scattered routes create major operational bottlenecks**.
 
-At **PT Pos Indonesia KCU Malang**, courier delivery areas can change depending on the daily distribution of packages. When delivery points are geographically scattered or workload distribution becomes uneven, couriers may need to cover areas that are farther apart while handling different numbers of packages.
+At **PT Pos Indonesia KCU Malang**, daily delivery volumes fluctuate across five districts in Kota Malang. When delivery points assigned to a courier are geographically dispersed or parcel counts become unbalanced, some couriers handle disproportionately heavy workloads while crossing overlapping areas.
 
 This led me to a key question:
 
-> *How can package delivery points be grouped into geographically compact zones while maintaining a balanced workload among couriers?*
-
-To address this problem, I developed a spatial clustering approach using **Balanced K-Means**, combining geographic proximity with workload-balancing constraints.
+> *What if a delivery planning system could group scattered package addresses into geographically compact zones while balancing courier workloads automatically?*
 
 ---
 
 ## 🎯 Project Context
 
-* **Type:** Undergraduate Final Thesis
-* **Field:** Applied Informatics Engineering / Machine Learning
-* **Research Area:** Geospatial Clustering & Last-Mile Delivery
-* **Role:** Researcher & System Developer
-* **Institution:** State Polytechnic of Malang
-* **Research Object:** PT Pos Indonesia KCU Malang
-* **Algorithm:** Balanced K-Means
-* **Distance Metric:** Euclidean Distance
+- **Type:** Undergraduate Final Thesis (*Skripsi D4*)
+- **Field:** Applied Informatics Engineering / Geospatial Machine Learning
+- **Role:** Researcher & Full-Stack System Developer
+- **Institution:** State Polytechnic of Malang (*Politeknik Negeri Malang*)
+- **Validation:** Evaluated on historical PT Pos Indonesia KCU Malang delivery records (July 2024 dataset across five districts in Kota Malang) and benchmarked against actual field courier assignments (`Petugas`)
 
 ---
 
 ## 👨‍💻 My Contribution
 
-As the individual researcher and developer of this project, I designed the complete research and system workflow, including:
+As the individual researcher and developer of this project, I was responsible for designing and implementing the end-to-end geospatial clustering web system, including multi-format dataset ingestion (`CSV`/`XLSX`/`XLS`), address cleaning, Google Maps geocoding integration, planar meter coordinate projection, actual PT Pos baseline evaluation (`evaluasi_aktual`), two-stage **K-Means++** and **HBCDP** clustering, cluster quality and workload evaluation, interactive map visualization, and Dockerized PostgreSQL deployment.
 
-* historical delivery-data preprocessing
-* recipient-address cleaning
-* address geocoding
-* geographic coordinate validation
-* coordinate transformation for spatial distance calculation
-* Balanced K-Means implementation
-* courier workload balancing
-* cluster evaluation
-* spatial visualization of delivery zones
-* interpretation of clustering results for operational recommendations
-
-The system was designed to transform raw historical delivery records into structured geographic delivery zones that can support courier-area planning.
+I also calibrated spatial constraints against Kota Malang's five subdistrict centroids and verified system reliability through automated unit and database integration tests.
 
 ---
 
 ## ⚙️ My Approach (How I Think)
 
-Instead of applying standard clustering directly to package locations, I focused on three principles.
+Instead of applying standard unconstrained clustering directly to raw addresses, I focused on three key principles:
 
 ### 1. Spatial Proximity Over Arbitrary Assignment
 
-Courier zones should represent geographically meaningful areas.
+Courier zones must represent contiguous, geographically logical areas rather than scattered stops.
 
-➡️ I used **geographic coordinates derived from recipient addresses** and calculated spatial proximity using **Euclidean Distance** after coordinate transformation.
-
-This allows delivery points located closer to each other to be grouped within the same delivery zone.
+➡️ I projected geocoded recipient coordinates into **planar meter coordinates** and calculated **Euclidean distances**, grouping nearby delivery points into cohesive zones.
 
 ---
 
-### 2. Balance Over Standard Clustering
+### 2. Workload Balance Over Unconstrained Clustering
 
-Standard K-Means primarily minimizes the distance between points and cluster centroids, but it does not guarantee that cluster sizes are balanced.
+Standard K-Means minimizes distance to centroids, but it often produces severely uneven parcel counts across couriers.
 
-➡️ I implemented **Balanced K-Means** to simultaneously consider:
-
-* spatial compactness
-* courier workload distribution
-* cluster capacity constraints
-
-The objective is to prevent situations where one courier receives significantly more delivery points than another.
+➡️ I implemented a two-stage pipeline combining **K-Means++** spatial initialization with **HBCDP (Heuristic Balancing for Courier Delivery Zones)** and a calibrated maximum distance threshold ($D = 5,285.15\text{ m}$) to equalize workload without fragmenting zones.
 
 ---
 
-### 3. Operational Relevance Over Pure Algorithmic Results
+### 3. Fair Baseline Benchmarking
 
-A clustering result is only useful if it can be interpreted operationally.
+Algorithmic metrics are only meaningful when compared fairly against real operations.
 
-➡️ I designed the output as **visual delivery zones and cluster summaries**, making it easier to analyze:
-
-* package distribution
-* courier workload
-* cluster coverage
-* spatial relationships between delivery points
+➡️ I built an automated baseline evaluation service (`evaluasi_aktual`) that benchmarks algorithmic clusters head-to-head against actual PT Pos courier assignments (`Petugas`) on the exact same geocoded parcel subset.
 
 ---
 
 ## 📌 Project Overview
-
-This project develops a **geospatial clustering system for package delivery-zone allocation** using the Balanced K-Means algorithm.
-
-Historical package-delivery data from PT Pos Indonesia KCU Malang is processed and transformed into geographic coordinates. The delivery locations are then grouped into balanced spatial clusters representing recommended courier delivery zones.
-
-The system combines:
-
-**Delivery Data → Geocoding → Spatial Transformation → Balanced K-Means → Cluster Evaluation → Interactive Visualization**
+An end-to-end geospatial web application built with **Flask** and **PostgreSQL** to optimize last-mile package delivery zones in Kota Malang by combining address geocoding, actual courier baseline benchmarking, two-stage spatial workload balancing (**K-Means++** + **HBCDP**), and interactive map visualization.
 
 ---
 
 ## 🚀 Key Features
-
-* **📍 Address Geocoding:** Converts recipient addresses into latitude and longitude coordinates.
-* **🗺️ Spatial Data Processing:** Validates and transforms geographic coordinates for clustering.
-* **🧠 Balanced K-Means Clustering:** Generates geographically compact delivery zones while maintaining balanced cluster sizes.
-* **📏 Euclidean Distance:** Measures spatial proximity between delivery points and cluster centroids.
-* **⚖️ Workload Balancing:** Controls the distribution of delivery points across courier zones.
-* **📊 Cluster Evaluation:** Evaluates both clustering quality and workload distribution.
-* **🗺️ Interactive Mapping:** Displays delivery points, cluster assignments, and delivery zones spatially.
-* **📑 Cluster Summary:** Provides operational summaries for each generated delivery zone.
+- **📍 Multi-Format Upload & Google Maps Geocoding:** Processes `CSV`, `XLSX`, and `XLS` delivery records, cleans recipient addresses, validates coordinates within Kota Malang boundaries, and geocodes addresses via the Google Maps Geocoding API.
+- **📊 Actual PT Pos Baseline Evaluation (`evaluasi_aktual`):** Preserves the optional **`Petugas`** column during preprocessing, computes baseline metrics right after geocoding, and displays them on the **Upload** page (before clustering starts), **Dashboard**, **Aktual PT Pos Zone** tab, and **Evaluation** page.
+- **🧠 Two-Stage Spatial Clustering (K-Means++ & HBCDP):** Initializes spatially well-separated centroids using K-Means++ and iteratively rebalances parcel counts using HBCDP with stage-by-stage transition logs.
+- **⚖️ Head-to-Head Evaluation in Meter Coordinates:** Computes **Silhouette Score**, **Davies-Bouldin Index (DBI)**, **workload population variance ($Z_1$)**, and **reassignment distance cost ($Z_2$)** in planar meters via `services/actual_evaluation_service.py`.
+- **🗺️ Interactive Zone Mapping:** Renders delivery points, cluster centroids, Convex Hull polygon boundaries (Shapely), and actual courier territories on an interactive Google Maps interface.
+- **📥 Structured Zone Export:** Exports clustered delivery assignments enriched with the **`Petugas Aktual`** column for direct operational comparison.
 
 ---
 
-## 🧠 Design Reasoning
+## 🧠 Design Reasoning 
 
-### **The Problem: Dynamic Courier Delivery Areas**
-
-Package distribution changes from day to day.
-
-Because courier assignments depend on the distribution of incoming packages, delivery areas may not always remain geographically compact or evenly distributed.
-
-This creates two important challenges:
-
-* delivery points assigned to the same courier may be geographically dispersed
-* the number of packages handled by each courier may become uneven
-
----
+### **The Problem: Uneven Courier Workloads & Dispersed Routes**
+Analyzing historical parcel distribution at PT Pos Indonesia KCU Malang revealed two operational challenges:
+- **Spatial Overlap:** Daily shifts in package destinations can cause courier delivery areas to stretch across distant neighborhoods.
+- **Workload Imbalance:** Without systematic capacity balancing, individual couriers can receive significantly different daily parcel counts.
 
 ### **The Research: Beyond Standard K-Means**
+Conventional K-Means focuses purely on minimizing spatial distance, offering no control over cluster size equality. Conversely, forcing strict equal cluster sizes without spatial boundaries can assign far-away packages to an underloaded courier.
 
-Traditional K-Means is effective for grouping geographically similar points because it minimizes the distance between data points and their cluster centroid.
+### **The Solution: Why K-Means++ + HBCDP?**
+1. **Spatially Sound Initialization (K-Means++):** Distributes initial cluster centers across Kota Malang's five districts to prevent poor local optima.
+2. **Distance-Bounded Balancing (HBCDP):** Reassigns boundary parcels toward balanced cluster capacities ($\approx n / K$) while enforcing a maximum spatial distance constraint ($D = 5,285.15\text{ m}$, derived from the mean distance across Kota Malang's 5 subdistrict centroids).
+3. **Strict Evaluation & Integrity Rules:**
+   - **Manual $K$ vs. Actual Couriers:** Target cluster count $K$ is set manually and may differ from the actual number of couriers; K-Means++ and HBCDP always run across **all successfully geocoded points**.
+   - **Fair Subset Comparison:** Head-to-head comparisons of **Silhouette Score, DBI, and $Z_1$** evaluate the exact same subset of parcels carrying a `Petugas` label using the algorithm's assigned cluster labels directly without re-clustering.
+   - **Missing `Petugas` Handling:** If the uploaded file omits `Petugas`, actual baseline metrics display as `N/A` while clustering still runs on all geocoded points; **$Z_2$** and HBCDP stage histories remain full-dataset diagnostics.
+   - **Normalization & Null Safety:** `Petugas` names are whitespace-trimmed while remaining case-sensitive. Undefined metrics (such as fewer than two valid clusters) are stored as `NULL` with an explicit reason rather than `0`, whereas a single courier validly produces $Z_1 = 0$.
+   - **Data Fingerprinting & Timer Scope:** A data fingerprint detects changes to coordinates or `Petugas` labels so re-completing geocoding refreshes `evaluasi_aktual` (changing $K$ alone does not recompute the actual baseline). The runtime timer strictly covers **K-Means++ initialization through HBCDP completion**.
 
-However, standard K-Means does not explicitly control the number of points assigned to each cluster.
-
-For courier delivery-zone allocation, this limitation is important because a spatially compact cluster can still result in an uneven workload.
-
-Therefore, this research applies **Balanced K-Means**, where cluster assignments consider both geographic proximity and balancing constraints.
-
----
-
-### **The Solution: Why Balanced K-Means?**
-
-#### 1. Spatial Compactness
-
-Delivery points are grouped according to their proximity to cluster centroids using **Euclidean Distance**.
-
-This encourages each courier zone to consist of locations that are geographically close to each other.
-
-#### 2. Balanced Workload
-
-Cluster capacity constraints are introduced so that delivery points are distributed more evenly across the available couriers.
-
-This prevents highly unbalanced cluster sizes.
-
-#### 3. Operational Visualization
-
-The clustering results are displayed through geographic visualization, allowing each recommended zone to be inspected spatially rather than only through numerical outputs.
+### Evaluation Metrics Summary
+| Metric | Dimension | Interpretation |
+| :--- | :--- | :--- |
+| **Silhouette Score** | Spatial Cohesion & Separation | Ranges from `-1` to `1` (**higher is better**). |
+| **Davies-Bouldin Index (DBI)** | Cluster Similarity | Measures intra-cluster dispersion vs. inter-cluster separation (**lower is better**). |
+| **$Z_1$ (Workload Variance)** | Workload Balance | Population variance of parcel counts per courier/cluster (**lower is more balanced**). |
+| **$Z_2$ (Reassignment Cost)** | Balancing Distance Cost | Cumulative planar meter distance incurred when shifting points during HBCDP balancing. |
 
 ---
 
-## 🔬 Research Workflow
-
-### 1. Historical Delivery Data
-
-The research uses historical delivery records from **PT Pos Indonesia KCU Malang**.
-
-The main attributes used include:
-
-* delivery date
-* recipient address
-* courier information
-* package delivery records
-* geographic coordinates generated through geocoding
-
-The research focuses on delivery data from **July 2024** within the operational area of PT Pos Indonesia KCU Malang.
+## 🤝 Collaboration & Dataset
+This research was conducted using historical parcel delivery records from **PT Pos Indonesia KCU Malang**, covering five districts in Kota Malang (July 2024 dataset).
+- **Operational Goal:** Transform raw historical delivery manifests (`CSV`/`XLSX`/`XLS`) into balanced, geographically compact courier delivery zones benchmarked against actual field assignments (`Petugas`).
+- **Result:** Demonstrated improved workload balance ($Z_1$) while preserving spatial compactness across all five districts.
 
 ---
 
-### 2. Data Cleaning
-
-Raw address data is cleaned before geocoding.
-
-The preprocessing process includes:
-
-* handling missing values
-* standardizing address formats
-* removing unnecessary characters
-* checking duplicate records
-* validating administrative-area information
+## 📚 Academic Thesis
+- **Title:** "Package Delivery Zone Allocation Based on Spatial Proximity and Courier Workload Balance Using K-Means++ and HBCDP"
+- **Indonesian Title:** "Pembagian Zona Pengantaran Paket Berdasarkan Kedekatan Spasial dan Keseimbangan Beban Kerja Kurir Menggunakan Algoritma Balanced K-Means"
+- **Institution:** State Polytechnic of Malang (*Politeknik Negeri Malang*)
+- **Repository:** [GeoKurir Malang Thesis Repository](https://github.com/achmaddoli/RepoSkripsi_AchmadDoliHarahap_4J_RPL.git)
 
 ---
 
-### 3. Address Geocoding
-
-Recipient addresses are converted into geographic coordinates.
-
-```text
-Recipient Address
-        ↓
-Address Cleaning
-        ↓
-Geocoding
-        ↓
-Latitude & Longitude
-        ↓
-Coordinate Validation
-```
-
-These coordinates represent the spatial position of each package-delivery point.
+## 🛠️ Tech Stack
+| Category | Tools & Technologies |
+| :--- | :--- |
+| **Backend & Web App** | Python, Flask |
+| **Clustering & Geospatial** | NumPy, Pandas, Scikit-learn, Shapely (Convex Hull), Planar Meter Projection |
+| **Geocoding & Maps** | Google Maps Platform (Geocoding API & Maps JavaScript API) |
+| **Database & Admin** | PostgreSQL, Custom Migration Runner (`migrate.py`), Adminer |
+| **Containerization & QA** | Docker, Docker Compose (`geokurir-actual`), Python `unittest` |
 
 ---
 
-### 4. Coordinate Transformation
+## ⚙️ Installation & System Setup
 
-Latitude and longitude are geographic coordinates expressed in angular units.
+### 1. Clone Repository
 
-Because Balanced K-Means relies on distance calculations, the coordinates are transformed into an appropriate planar representation before Euclidean Distance is applied.
-
-The Euclidean distance between delivery point \(p_i\) and centroid \(c_k\) is:
-
-```text
-d(pi, ck) = √((xi - xk)² + (yi - yk)²)
+```bash
+git clone [https://github.com/achmaddoli/RepoSkripsi_AchmadDoliHarahap_4J_RPL.git](https://github.com/achmaddoli/RepoSkripsi_AchmadDoliHarahap_4J_RPL.git)
+cd RepoSkripsi_AchmadDoliHarahap_4J_RPL
 ```
 
 ---
 
-### 5. Balanced K-Means Clustering
+### 2. Configure Environment Variables
 
-The clustering process follows several stages:
+Create a `.env` file in the project root and configure your own Google Maps API key for geocoding new addresses (keys and data are never copied automatically from other deployments):
 
-```text
-Delivery Coordinates
-        ↓
-Initialize Cluster Centroids
-        ↓
-Calculate Euclidean Distances
-        ↓
-Balanced Assignment
-        ↓
-Update Centroids
-        ↓
-Check Convergence
-        ↓
-Final Delivery Zones
-```
-
-Unlike standard K-Means, the assignment stage also considers the maximum or target capacity of each cluster.
-
-This ensures that the resulting clusters remain relatively balanced.
-
----
-
-## ⚖️ Balanced Assignment Concept
-
-Assume:
-
-```text
-n = total delivery points
-K = number of active couriers
-```
-
-The expected cluster size can be approximated as:
-
-```text
-Target Cluster Size ≈ n / K
-```
-
-When the number of points cannot be divided equally, the remaining points are distributed across several clusters while maintaining the smallest possible workload difference.
-
-Example:
-
-```text
-100 delivery points
-6 couriers
-
-Possible distribution:
-
-17
-17
-17
-17
-16
-16
-```
-
-instead of an unconstrained result such as:
-
-```text
-31
-22
-18
-14
-10
-5
+```env
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 ```
 
 ---
 
-## 📊 Evaluation
+### 3. Build & Start Containers (Docker Compose)
 
-The clustering results are evaluated from two main perspectives.
+Run from the project root directory:
 
-### **1. Spatial Clustering Quality**
-
-The spatial structure of the generated clusters can be evaluated using clustering metrics such as:
-
-#### Silhouette Score
-
-Measures how well each delivery point fits within its assigned cluster compared with neighboring clusters.
-
-```text
-Range: -1 to 1
+```bash
+docker compose up -d --build
 ```
 
-A higher value generally indicates better cluster separation and cohesion.
+The stack runs under the isolated Compose project `geokurir-actual` with its own PostgreSQL volume (`geokurir-actual_postgres_data`):
+- **Web Application:** `http://127.0.0.1:5001`
+- **PostgreSQL Host Port:** `5433`
+- **Adminer (Database UI):** `http://127.0.0.1:8081`
 
-#### Davies-Bouldin Index
+---
 
-Measures similarity between clusters based on within-cluster dispersion and between-cluster separation.
+### 4. Database Migrations
 
-```text
-Lower value = better cluster separation
+The `web` container automatically executes `up` migrations before starting the Flask application. This applies schema additions safely without deleting existing datasets (**do not use `fresh` when upgrading**).
+
+To run or inspect migration status manually:
+
+```bash
+docker compose exec -T web python migrate.py up
+docker compose exec -T web python migrate.py status
 ```
 
 ---
 
-### **2. Workload Balance**
+### 5. Run Unit & Integration Tests
 
-The workload distribution between clusters is analyzed by comparing the number of delivery points assigned to each cluster.
-
-A balanced solution should minimize large differences between cluster sizes.
-
-The distribution can also be evaluated using the standard deviation of cluster sizes.
-
-```text
-Lower standard deviation
-        ↓
-More balanced workload distribution
-```
-
----
-
-## 🗺️ Spatial Visualization
-
-The clustering results are visualized geographically to make the generated zones easier to interpret.
-
-The visualization can display:
-
-* recipient delivery points
-* cluster membership
-* cluster centroids
-* courier delivery zones
-* number of delivery points per cluster
-
-Example structure:
-
-```text
-Interactive Map
-│
-├── Cluster 1
-│   ├── Delivery Points
-│   └── Centroid
-│
-├── Cluster 2
-│   ├── Delivery Points
-│   └── Centroid
-│
-└── Cluster N
-    ├── Delivery Points
-    └── Centroid
+```bash
+docker compose exec -T -e GEOKURIR_INTEGRATION_TESTS=1 web python -m unittest discover -s tests -v
 ```
 
 ---
 
 ## 🔄 Full System Workflow
 
-```text
-Historical Package Delivery Data
-              ↓
-        Data Selection
-              ↓
-        Data Cleaning
-              ↓
-       Address Geocoding
-              ↓
-     Coordinate Validation
-              ↓
-   Coordinate Transformation
-              ↓
-      Balanced K-Means
-              ↓
-       Cluster Evaluation
-              ↓
-  Delivery Zone Visualization
-              ↓
- Courier Zone Recommendation
-```
+### 6. How to Run the Full Workflow
+
+1. Start the Docker Compose stack (`web` and PostgreSQL database)
+2. Open `http://127.0.0.1:5001` and upload a parcel dataset (`CSV`, `XLSX`, or `XLS`) with optional **`Petugas`** column
+3. System cleans recipient addresses and runs **Google Maps Geocoding**
+4. System automatically computes and stores the actual PT Pos baseline in **`evaluasi_aktual`**, displaying baseline metrics on the **Upload** page before clustering starts
+5. Set the target number of courier zones ($K$) and start clustering
+6. Backend projects coordinates into planar meters and executes:
+   - **K-Means++** spatial centroid initialization
+   - **HBCDP** iterative workload balancing (with runtime measured strictly from K-Means++ start to HBCDP completion)
+7. Inspect interactive **Google Maps** delivery zones, **Aktual PT Pos Zone** comparison, and **Evaluation** metrics (**Silhouette Score, DBI, $Z_1$, $Z_2$**)
+8. Export clustered assignments enriched with **`Petugas Aktual`**
 
 ---
 
-## 🛠️ Tech Stack
+## 📌 Notes
 
-| Category                    | Tools & Technologies                                  |
-| :-------------------------- | :---------------------------------------------------- |
-| **Programming**             | Python                                                |
-| **Data Processing**         | Pandas, NumPy                                         |
-| **Machine Learning**        | Scikit-learn / Custom Balanced K-Means Implementation |
-| **Geospatial Processing**   | GeoPandas, Shapely                                    |
-| **Geocoding**               | OpenStreetMap / Nominatim                             |
-| **Distance Metric**         | Euclidean Distance                                    |
-| **Mapping**                 | Leaflet / Folium                                      |
-| **Data Visualization**      | Matplotlib                                            |
-| **Development Environment** | Google Colab / Jupyter Notebook                       |
-| **Data Format**             | CSV                                                   |
+- Each deployment requires its own `GOOGLE_MAPS_API_KEY` in `.env` to geocode newly uploaded addresses.
+- Updating geocoded coordinates or `Petugas` labels updates the data fingerprint and refreshes `evaluasi_aktual`, whereas changing $K$ alone re-runs clustering without recomputing the actual baseline.
 
 ---
 
-## 📂 Project Structure
+## 📺 Visuals & Interface
 
-```text
-balanced-kmeans-delivery-zones/
-│
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── geocoded/
-│
-├── notebooks/
-│   ├── data_preparation.ipynb
-│   ├── geocoding.ipynb
-│   ├── balanced_kmeans.ipynb
-│   └── evaluation.ipynb
-│
-├── src/
-│   ├── preprocessing.py
-│   ├── geocoding.py
-│   ├── balanced_kmeans.py
-│   ├── evaluation.py
-│   └── visualization.py
-│
-├── results/
-│   ├── clusters/
-│   ├── evaluation/
-│   └── maps/
-│
-├── requirements.txt
-├── README.md
-└── LICENSE
-```
+### 💻 Web Application Interface
+*The system provides an end-to-end geospatial workflow: Dataset Upload & Baseline Preview, Interactive Zone Mapping, Actual PT Pos Comparison, and Evaluation Diagnostics.*
+
+| 📤 Upload & Baseline Preview | 📊 Main Dashboard | 🗺️ Interactive Zone Map |
+| :---: | :---: | :---: |
+| <img src="public/upload.png" width="250" alt="Upload and Baseline Preview"> | <img src="public/dashboard.png" width="250" alt="Main Dashboard"> | <img src="public/map_zones.png" width="250" alt="Interactive Zone Map"> |
+| **🛵 Aktual PT Pos Zones** | **⚖️ Evaluation (Silhouette, DBI, Z₁, Z₂)** | **📥 Exported Zone Data** |
+| <img src="public/aktual_zones.png" width="250" alt="Aktual PT Pos Zones"> | <img src="public/evaluation.png" width="250" alt="Evaluation Metrics"> | <img src="public/export.png" width="250" alt="Exported Data"> |
 
 ---
 
-## ⚙️ Installation & Setup
-
-### 1. Clone Repository
-
-```bash
-git clone https://github.com/yourusername/balanced-kmeans-delivery-zones.git
-cd balanced-kmeans-delivery-zones
-```
-
----
-
-### 2. Create Virtual Environment
-
-```bash
-python -m venv venv
-```
-
-Activate the environment.
-
-Windows:
-
-```bash
-venv\Scripts\activate
-```
-
-Linux / macOS:
-
-```bash
-source venv/bin/activate
-```
-
----
-
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Example dependencies:
-
-```text
-numpy
-pandas
-scikit-learn
-geopandas
-shapely
-folium
-matplotlib
-geopy
-```
-
----
-
-## ▶️ Running the Project
-
-The complete workflow can be executed sequentially.
-
-### Step 1 — Data Preparation
-
-Prepare and clean the historical delivery dataset.
-
-```bash
-python src/preprocessing.py
-```
-
----
-
-### Step 2 — Geocoding
-
-Convert recipient addresses into geographic coordinates.
-
-```bash
-python src/geocoding.py
-```
-
----
-
-### Step 3 — Balanced K-Means
-
-Run the spatial clustering process.
-
-```bash
-python src/balanced_kmeans.py
-```
-
----
-
-### Step 4 — Evaluation
-
-Calculate clustering and workload-balancing metrics.
-
-```bash
-python src/evaluation.py
-```
-
----
-
-### Step 5 — Visualization
-
-Generate spatial visualization of the resulting delivery zones.
-
-```bash
-python src/visualization.py
-```
-
----
-
-## 📈 Expected Output
-
-The system produces several outputs:
-
-```text
-results/
-│
-├── clustered_delivery_points.csv
-├── cluster_summary.csv
-├── clustering_evaluation.csv
-└── delivery_zone_map.html
-```
-
-### Clustered Delivery Points
-
-Contains:
-
-```text
-delivery_id
-address
-latitude
-longitude
-cluster
-courier
-```
-
-### Cluster Summary
-
-Contains information such as:
-
-```text
-cluster_id
-number_of_delivery_points
-centroid_x
-centroid_y
-```
-
-### Interactive Map
-
-Displays each generated delivery zone and its corresponding package-delivery points.
-
----
-
-## 📌 Research Scope
-
-This research focuses specifically on:
-
-* historical package-delivery data from PT Pos Indonesia KCU Malang
-* package delivery locations within its operational area
-* delivery records from July 2024
-* geographic proximity between recipient locations
-* courier workload balancing
-* delivery-zone clustering rather than vehicle routing
-
-The research **does not attempt to determine the optimal sequence of roads or delivery routes**.
-
-Instead, it focuses on answering:
-
-> *Which delivery points should belong to the same courier zone?*
-
-Route optimization can subsequently be performed within each generated zone as a separate optimization problem.
-
----
-
-## 🧩 Research Contribution
-
-The main contribution of this project is the integration of:
-
-**Spatial Clustering + Workload Balancing + Operational Delivery-Zone Visualization**
-
-Rather than using clustering solely to discover geographic groups, this project applies Balanced K-Means to an operational last-mile delivery problem where both **distance and workload distribution matter**.
-
-The resulting clusters are intended to provide a data-driven reference for courier delivery-zone allocation.
-
----
-
-## 📚 Research Thesis
-
-**Title:**
-
-> **Package Delivery Zone Allocation Based on Spatial Proximity and Courier Workload Balance Using the Balanced K-Means Algorithm**
-
-**Original Indonesian Title:**
-
-> *Pembagian Zona Pengantaran Paket Berdasarkan Kedekatan Spasial dan Keseimbangan Beban Kerja Kurir Menggunakan Algoritma Balanced K-Means*
-
-**Institution:** State Polytechnic of Malang
-**Program:** Applied Informatics Engineering
-**Research Object:** PT Pos Indonesia KCU Malang
-
----
-
-## ⚠️ Challenges & How I Addressed Them
-
-### 1. Inconsistent Recipient Addresses
-
-**Challenge:**
-Historical delivery records may contain addresses written in different formats, abbreviations, or incomplete administrative information.
-
-**Approach:**
-I implemented address-cleaning and normalization steps before geocoding to improve coordinate consistency.
-
----
-
-### 2. Geographic Coordinate Accuracy
-
-**Challenge:**
-Geocoding results may not always correspond exactly to the intended recipient location.
-
-**Approach:**
-Coordinates are validated against the research area's geographic boundaries before being used in clustering.
-
----
-
-### 3. Spatial Compactness vs. Workload Balance
-
-**Challenge:**
-The closest cluster assignment does not always produce balanced workloads.
-
-**Approach:**
-Instead of relying solely on conventional K-Means assignment, I applied balancing constraints during the assignment process so that cluster capacities remain controlled.
-
----
-
-### 4. Translating Clusters into Operational Information
-
-**Challenge:**
-Numerical cluster labels alone are difficult for operational users to interpret.
-
-**Approach:**
-The final clusters are transformed into geographic visualizations and cluster-level summaries so the spatial distribution of courier zones can be inspected directly.
-
----
-
-## 🎓 What I Learned
-
-This project strengthened my understanding of how **machine learning algorithms must be adapted to real operational constraints**.
-
-I learned that obtaining mathematically valid clusters is only one part of solving a real-world problem. The results must also consider workload distribution, geographic interpretation, data quality, and operational usability.
-
-Through this project, I developed practical experience in:
-
-* geospatial data processing
-* machine learning clustering
-* Balanced K-Means
-* spatial distance analysis
-* geocoding
-* data preprocessing
-* clustering evaluation
-* geographic visualization
-* operational problem formulation
-
-Most importantly, this research taught me how to translate a real operational problem into a structured **data-driven decision-support approach**.
-
----
-
-## 🔮 Future Development
-
-Possible future extensions include:
-
-* road-network-based distance calculations
-* vehicle routing optimization within each cluster
-* dynamic daily courier allocation
-* package-volume and weight-based workload balancing
-* traffic-aware delivery-zone generation
-* integration with real-time courier tracking
-* automated delivery-route recommendation
-
----
-
-## 👨‍💻 Author
-
-**Achmad Doli Harahap**
-
-Applied Informatics Engineering
-State Polytechnic of Malang
-
-**Research Interests:**
-Machine Learning · Geospatial Analytics · Intelligent Systems · Internet of Things · Data Analytics
+## 📈 Learning Journey
+### **⚠️ Challenges & How I Overcame Them**
+
+#### 1. Geocoding Accuracy & Spatial Boundary Control
+- **Challenge:** Raw historical delivery records contained inconsistent address formats and abbreviations that could produce inaccurate coordinates or overly stretched clusters.
+- **Solution:** I implemented address cleaning and boundary validation prior to clustering, and calibrated the HBCDP maximum distance threshold ($D = 5,285.15\text{ m}$) using the mean distance across Kota Malang's five subdistrict centroids so balanced zones remain geographically compact.
+
+#### 2. Edge-Case Geometries in Zone Boundary Rendering
+- **Challenge:** When evaluating higher values of $K$, clusters containing only one or two delivery points caused Shapely's `.convex_hull` to return a `Point` or `LineString` instead of a `Polygon`, triggering attribute errors during boundary rendering.
+- **Solution:** I added explicit `geom_type` handling in the spatial visualization pipeline to render polygons, line segments, and single-point zones cleanly on the map.
+
+### **What I Learned**
+Building this end-to-end system strengthened my understanding of how **machine learning algorithms must be adapted to real operational constraints**. I learned that mathematical cluster validity alone is not enough—translating research into a production-ready tool requires fair baseline benchmarking, strict null/edge-case handling, reproducible database migrations, and clear visual diagnostics that operational teams can trust.
