@@ -220,13 +220,13 @@ docker compose exec -T -e GEOKURIR_INTEGRATION_TESTS=1 web python -m unittest di
 ## 📺 Visuals & Interface
 
 ### 💻 Web Application Interface
-*The system provides an end-to-end geospatial workflow: Dataset Upload & Baseline Preview, Interactive Zone Mapping, Actual PT Pos Comparison, and Evaluation Diagnostics.*
+*The system provides an end-to-end geospatial workflow across 6 core views: Dashboard Overview, Dataset Upload, Data Processing & Geocoding, Delivery Zone Results, Clustering Evaluation, and Dataset Management.*
 
-| 📤 Upload & Baseline Preview | 📊 Main Dashboard | 🗺️ Interactive Zone Map |
+| 📊 Dashboard Overview | 📤 Upload Dataset | ⚙️ Data Processing & Geocoding |
 | :---: | :---: | :---: |
-| <img src="public/upload.png" width="250" alt="Upload and Baseline Preview"> | <img src="public/dashboard.png" width="250" alt="Main Dashboard"> | <img src="public/map_zones.png" width="250" alt="Interactive Zone Map"> |
-| **🛵 Aktual PT Pos Zones** | **⚖️ Evaluation (Silhouette, DBI, Z₁, Z₂)** | **📥 Exported Zone Data** |
-| <img src="public/aktual_zones.png" width="250" alt="Aktual PT Pos Zones"> | <img src="public/evaluation.png" width="250" alt="Evaluation Metrics"> | <img src="public/export.png" width="250" alt="Exported Data"> |
+| <img src="public/dashboard.png" width="250" alt="Dashboard Overview"> | <img src="public/upload.png" width="250" alt="Upload Dataset"> | <img src="public/processing.png" width="250" alt="Data Processing and Geocoding"> |
+| **🗺️ Delivery Zone Results** | **⚖️ Clustering Evaluation** | **🗂️ Manage Datasets** |
+| <img src="public/zones.png" width="250" alt="Delivery Zone Results"> | <img src="public/evaluation.png" width="250" alt="Clustering Evaluation"> | <img src="public/manage_dataset.png" width="250" alt="Manage Datasets"> |
 
 ---
 
