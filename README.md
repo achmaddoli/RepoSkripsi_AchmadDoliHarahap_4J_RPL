@@ -25,7 +25,7 @@ This led me to a key question:
 - **Field:** Applied Informatics Engineering / Geospatial Machine Learning
 - **Role:** Researcher & Full-Stack System Developer
 - **Institution:** State Polytechnic of Malang (*Politeknik Negeri Malang*)
-- **Validation:** Evaluated on historical PT Pos Indonesia KCU Malang delivery records (July 2024 dataset across five districts in Kota Malang) and benchmarked against actual field courier assignments (`Petugas`)
+- **Validation:** Evaluated on historical PT Pos Indonesia KCU Malang delivery records (August 2025 dataset across five districts in Kota Malang) and benchmarked against actual field courier assignments (`Petugas`)
 
 ---
 
