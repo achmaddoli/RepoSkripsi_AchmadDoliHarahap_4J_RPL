@@ -5,11 +5,40 @@
 
 const GeoUtils = {
   /**
+   * Konsep Shapely Geometry untuk batasan cluster (seperti pada hbcdp_service.py):
+   * - Point: 1 titik unik -> [lat, lng]
+   * - LineString: 2 titik atau titik kolinear -> [[lat1, lng1], [lat2, lng2]]
+   * - Polygon: >= 3 titik planar -> closed ring [[lat, lng], ..., [lat, lng]]
+   */
+  getShapelyGeometry(points) {
+    const hullCoords = this.convexHull(points);
+    if (!hullCoords || hullCoords.length === 0) {
+      return null;
+    }
+    if (hullCoords.length === 1) {
+      return {
+        type: 'Point',
+        coordinates: hullCoords[0]
+      };
+    }
+    if (hullCoords.length === 2) {
+      return {
+        type: 'LineString',
+        coordinates: hullCoords
+      };
+    }
+    return {
+      type: 'Polygon',
+      coordinates: [hullCoords]
+    };
+  },
+
+  /**
    * Andrew's Monotone Chain 2D Convex Hull Algorithm
-   * @param {Array<{lat: number, lng: number}>} points
+   * Mengikuti semantik Shapely MultiPoint(points).convex_hull
+   * @param {Array<{lat: number, lng: number}|[number, number]>} points
    * @returns {Array<[number, number]>} Coordinates of Point, LineString, or closed Polygon
    */
-  
   convexHull(points) {
     if (!Array.isArray(points) || points.length === 0) {
       return [];

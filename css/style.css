@@ -387,6 +387,55 @@ body {
   margin-bottom: 20px;
 }
 
+.actual-kpi-grid,
+.comparison-maps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.comparison-maps-grid > .dashboard-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.comparison-maps-grid .map-frame-box {
+  margin-top: auto;
+}
+
+.comparison-maps-grid .map-legend-overlay {
+  font-size: 10px;
+  padding: 8px;
+}
+
+.comparison-note {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.actual-baseline-panel[hidden] {
+  display: none;
+}
+
+.actual-baseline-panel .metrics-row-grid {
+  margin-top: 16px;
+}
+
+.distribution-tabs {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px;
+}
+
 .kpi-card {
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -471,9 +520,8 @@ body {
 
 /* Map Inset Legend (faithful to wireframe overlay) */
 .map-legend-overlay {
-  position: absolute;
-  top: 10px;
-  right: 10px;
+  bottom: 20px;
+  left: 12px;
   z-index: 999;
   background-color: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(4px);
@@ -1133,6 +1181,9 @@ body {
    Responsive Breakpoints
    -------------------------------------------------------------------------- */
 @media (max-width: 1100px) {
+  .comparison-maps-grid {
+    grid-template-columns: 1fr;
+  }
   .dual-col-grid,
   .zona-layout-grid,
   .template-card-grid,
@@ -1171,6 +1222,18 @@ body {
   .kpi-grid,
   .metrics-row-grid {
     grid-template-columns: 1fr;
+  }
+
+  .header-action-control,
+  .filter-group {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .select-custom {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
   }
 
   .template-actions {
@@ -1212,4 +1275,486 @@ body {
     border-top: 2px dashed #1c2d5a;
     background: transparent;
     flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Preprocessing & Geocoding Accordion Styles (Revisi 29 Oktober)
+   ========================================================================== */
+.prep-item-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.prep-item-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.prep-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+.prep-item-header:hover {
+  background-color: #f8fafc;
+}
+
+.prep-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.prep-chevron {
+  color: #64748b;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.prep-chevron.rotated {
+  transform: rotate(90deg);
+}
+
+.prep-item-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.prep-item-desc {
+  font-size: 12.5px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.badge-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  background: #f1f5f9;
+  padding: 4px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.badge-count.badge-red {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+.prep-drawer {
+  border-top: 1px solid #f1f5f9;
+  background: #fafbfc;
+}
+
+.table-compact th,
+.table-compact td {
+  padding: 8px 12px;
+  font-size: 12.5px;
+}
+
+/* Clickable cluster row on Hasil Pembagian Zona */
+.clickable-cluster-row {
+  cursor: pointer;
+  transition: background-color 0.15s, border-left-color 0.15s;
+}
+
+.clickable-cluster-row:hover {
+  background-color: #f1f5f9 !important;
+}
+
+.clickable-cluster-row:active {
+  background-color: #e2e8f0 !important;
+}
+
+/* Guide Badges */
+.guide-badge-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.guide-blue {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.guide-red {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.guide-green {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+/* =====================================================
+   CENTER CARD PREPROCESSING & GEOCODING
+   ===================================================== */
+
+#view-upload .metrics-row-grid {
+    display: flex;
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+#view-upload .metrics-row-grid > * {
+    flex: 0 1 300px;
+    min-width: 0;
+}
+
+@media (max-width: 768px) {
+    #view-upload .metrics-row-grid > * {
+        flex: 1 1 100%;
+    }
+}
+
+/* No. Resi dapat diklik untuk melihat titik pada peta */
+.resi-map-link {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: #1c2d5a;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.resi-map-link:hover {
+  color: #0284c7;
+  text-decoration: underline;
+}
+
+.resi-map-link:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+
+/* =====================================================
+   PREPROCESSING - KONSISTENSI LEBAR KOLOM
+   ===================================================== */
+
+/* Pengaturan dasar tabel preprocessing */
+.prep-drawer .table-compact {
+    width: 100%;
+    table-layout: fixed;
+}
+
+/* Dataset dengan Petugas - 6 kolom */
+.prep-drawer .table-compact:has(.prep-petugas-header) th:nth-child(1) {
+    width: 4%;
+}
+
+.prep-drawer .table-compact:has(.prep-petugas-header) th:nth-child(2) {
+    width: 6%;
+}
+
+.prep-drawer .table-compact:has(.prep-petugas-header) th:nth-child(3) {
+    width: 19%;
+}
+
+.prep-drawer .table-compact:has(.prep-petugas-header) th:nth-child(4) {
+    width: 12%;
+}
+
+.prep-drawer .table-compact:has(.prep-petugas-header) th:nth-child(5) {
+    width: 34%;
+}
+
+.prep-drawer .table-compact:has(.prep-petugas-header) th:nth-child(6) {
+    width: 25%;
+}
+
+/* Dataset tanpa Petugas - 5 kolom */
+.prep-drawer .table-compact:not(:has(.prep-petugas-header)) th:nth-child(1) {
+    width: 4%;
+}
+
+.prep-drawer .table-compact:not(:has(.prep-petugas-header)) th:nth-child(2) {
+    width: 6%;
+}
+
+.prep-drawer .table-compact:not(:has(.prep-petugas-header)) th:nth-child(3) {
+    width: 22%;
+}
+
+.prep-drawer .table-compact:not(:has(.prep-petugas-header)) th:nth-child(4) {
+    width: 43%;
+}
+
+.prep-drawer .table-compact:not(:has(.prep-petugas-header)) th:nth-child(5) {
+    width: 25%;
+}
+
+/* Penanganan teks panjang */
+.prep-drawer .table-compact th,
+.prep-drawer .table-compact td {
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+/* PREPROCESSING - TABEL DI LUAR WILAYAH (7 KOLOM) */
+
+.prep-drawer .table-compact:has(.prep-kota-header) {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(1) {
+    width: 4%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(2) {
+    width: 6%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(3) {
+    width: 17%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(4) {
+    width: 10%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(5) {
+    width: 28%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(6) {
+    width: 15%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header) th:nth-child(7) {
+    width: 20%;
+}
+
+/* DI LUAR WILAYAH - TANPA PETUGAS (6 KOLOM) */
+
+.prep-drawer .table-compact:has(.prep-kota-header):not(:has(.prep-petugas-header)) th:nth-child(1) {
+    width: 4%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header):not(:has(.prep-petugas-header)) th:nth-child(2) {
+    width: 6%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header):not(:has(.prep-petugas-header)) th:nth-child(3) {
+    width: 20%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header):not(:has(.prep-petugas-header)) th:nth-child(4) {
+    width: 32%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header):not(:has(.prep-petugas-header)) th:nth-child(5) {
+    width: 16%;
+}
+
+.prep-drawer .table-compact:has(.prep-kota-header):not(:has(.prep-petugas-header)) th:nth-child(6) {
+    width: 22%;
+}
+
+
+/* =====================================================
+   BASELINE AKTUAL PT POS - 4 CARD SEJAJAR
+   ===================================================== */
+
+#view-upload .actual-baseline-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    width: 100%;
+}
+
+#view-upload .actual-baseline-metrics > .metric-kpi-box {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+}
+
+/* Tablet */
+@media (max-width: 900px) {
+    #view-upload .actual-baseline-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+    #view-upload .actual-baseline-metrics {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+/* =====================================================
+   TOOLTIP INFORMASI Z2 AKTUAL PT POS
+   ===================================================== */
+
+.z2-info-tooltip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 5px;
+    vertical-align: middle;
+    cursor: help;
+    outline-offset: 3px;
+}
+
+.z2-info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid #2563eb;
+    border-radius: 50%;
+    color: #2563eb;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+
+.z2-tooltip-text {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 240px;
+    padding: 10px 12px;
+    background: #263e6b;
+    color: #ffffff;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    text-align: left;
+    white-space: normal;
+    box-shadow: 0 3px 8px rgba(28, 45, 90, 0.12);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 1000;
+    transition: opacity 0.15s ease;
+}
+
+
+.z2-info-tooltip:hover .z2-tooltip-text,
+.z2-info-tooltip:focus .z2-tooltip-text,
+.z2-info-tooltip:focus-within .z2-tooltip-text {
+    opacity: 1;
+    visibility: visible;
+}
+
+@media (max-width: 480px) {
+    .z2-tooltip-text {
+        width: 200px;
+    }
+}
+
+
+/* =====================================================
+   KETERANGAN Z2 - DASHBOARD
+   ===================================================== */
+
+.z2-dashboard-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 12px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.z2-dashboard-note svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.z2-dashboard-note strong {
+    color: #1c2d5a;
+    font-weight: 600;
+}
+/* =====================================================
+   UNDUH PETA - HASIL PEMBAGIAN ZONA
+   ===================================================== */
+
+/* Judul peta dan tombol unduh */
+.zona-map-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.zona-map-heading .card-title {
+    margin-bottom: 0;
+}
+
+/* Tombol Unduh Peta */
+.btn-download-map {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 7px 12px;
+    background-color: #ffffff;
+    border: 1px solid var(--pos-navy);
+    border-radius: var(--radius-md);
+    color: var(--pos-navy);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+}
+
+.btn-download-map svg {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+}
+
+.btn-download-map:hover:not(:disabled) {
+    background-color: var(--pos-navy-subtle);
+}
+
+.btn-download-map:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Tampilan mobile */
+@media (max-width: 480px) {
+    .zona-map-heading {
+        align-items: flex-start;
+    }
+
+    .btn-download-map {
+        font-size: 11.5px;
+    }
 }

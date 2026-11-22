@@ -3,17 +3,24 @@ import io
 import csv
 import json
 import re
+import time
 from datetime import datetime
+from uuid import UUID
 from flask import Flask, request, jsonify, send_file, send_from_directory, render_template
 from werkzeug.utils import secure_filename
 from shapely.geometry import MultiPoint
 import xlsxwriter
 
 from config import Config
-from database.db import query_db, execute_db, execute_upload_transaction, get_db_connection
+from database.db import (
+    query_db, execute_db, execute_upload_transaction, get_db_connection,
+    get_actual_evaluation, save_actual_evaluation,
+)
 from services.geocoding_service import GeocodingService
 from services.kmeans_service import KMeansService
 from services.hbcdp_service import HBCDPService
+from services.preprocessing_service import preprocessing_service
+from services.actual_evaluation_service import ActualEvaluationService
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -29,12 +36,74 @@ app.config.from_object(Config)
 geocoding_service = GeocodingService(api_key=Config.GOOGLE_MAPS_API_KEY)
 kmeans_service = KMeansService()
 hbcdp_service = HBCDPService()
+actual_evaluation_service = ActualEvaluationService()
+
+
+def successful_dataset_points(id_dataset):
+    """Seluruh titik hasil geocoding; satu sumber data untuk baseline dan algoritma."""
+    return query_db("""
+        SELECT id_pengiriman, nosi, petugas, alamat_bersih, alamat_asli,
+               latitude, longitude, x_meter, y_meter, status_geocoding
+        FROM data_pengiriman
+        WHERE id_dataset = %s AND status_geocoding = 'SUCCESS'
+          AND latitude IS NOT NULL AND longitude IS NOT NULL
+          AND x_meter IS NOT NULL AND y_meter IS NOT NULL
+        ORDER BY id_pengiriman;
+    """, (id_dataset,))
+
+def compute_shapely_hull_latlng(points_latlng):
+    """
+    Menghitung Convex Hull menggunakan Shapely dari sekumpulan koordinat (lat, lng).
+    Mengembalikan array koordinat [[lat, lng], ...] yang siap langsung dirender oleh Leaflet.
+    - 0 titik: []
+    - 1 titik: [[lat, lng]]
+    - 2 titik / kolinear: [[lat1, lng1], [lat2, lng2]]
+    - >= 3 titik planar: [[lat1, lng1], [lat2, lng2], ..., [lat1, lng1]] (closed ring)
+    """
+    pts = [
+        (float(p[0]), float(p[1]))
+        for p in points_latlng
+        if p is not None and p[0] is not None and p[1] is not None
+    ]
+    if not pts:
+        return []
+
+    unique_pts = list(dict.fromkeys(pts))
+    if len(unique_pts) == 1:
+        return [[unique_pts[0][0], unique_pts[0][1]]]
+    if len(unique_pts) == 2:
+        return [[unique_pts[0][0], unique_pts[0][1]], [unique_pts[1][0], unique_pts[1][1]]]
+
+    try:
+        geom = MultiPoint(unique_pts).convex_hull
+        if geom.geom_type == "Polygon":
+            return [[float(lat), float(lng)] for lat, lng in geom.exterior.coords]
+        elif geom.geom_type == "LineString":
+            return [[float(lat), float(lng)] for lat, lng in geom.coords]
+        elif geom.geom_type == "Point":
+            return [[float(geom.x), float(geom.y)]]
+    except Exception:
+        pass
+    return [[p[0], p[1]] for p in unique_pts]
 
 # Penyimpanan sementara progres geocoding per dataset
 from threading import Lock
 
 geocoding_progress = {}
 geocoding_progress_lock = Lock()
+
+# Progress upload hanya disimpan di proses Flask ini (single worker).
+preprocessing_progress = {}
+preprocessing_progress_lock = Lock()
+
+
+def set_preprocessing_progress(upload_id, **fields):
+    if not upload_id:
+        return
+    with preprocessing_progress_lock:
+        if upload_id in preprocessing_progress:
+            preprocessing_progress[upload_id].update(fields)
+
 
 # ============================================================================
 # 1. Halaman Web (Frontend Routes)
@@ -239,19 +308,50 @@ def get_dataset_detail(id_dataset):
     """
     try:
         # 1. Ambil data dataset
-        ds_sql = "SELECT id_dataset, nama_file, tanggal_data::text, jumlah_data, jumlah_kurir, status FROM dataset WHERE id_dataset = %s;"
+        ds_sql = """
+            SELECT id_dataset, nama_file, tanggal_data::text, jumlah_data, jumlah_kurir, status,
+                   total_awal, eliminasi_wilayah, eliminasi_kosong, eliminasi_duplikat,
+                   eliminasi_alamat_umum, total_eliminasi, preprocessing_json
+            FROM dataset WHERE id_dataset = %s;
+        """
         ds = query_db(ds_sql, (id_dataset,), one=True)
         if not ds:
             return jsonify({"success": False, "error": "Dataset tidak ditemukan"}), 404
 
+        # Format tanggal DD/MM/YYYY
+        if ds.get("tanggal_data"):
+            try:
+                ds["tanggal_data_formatted"] = datetime.strptime(
+                    str(ds["tanggal_data"]), "%Y-%m-%d"
+                ).strftime("%d/%m/%Y")
+            except Exception:
+                ds["tanggal_data_formatted"] = str(ds["tanggal_data"])
+        else:
+            ds["tanggal_data_formatted"] = "-"
+
+        # Parse preprocessing JSON jika ada
+        if ds.get("preprocessing_json"):
+            try:
+                ds["preprocessing"] = json.loads(ds["preprocessing_json"])
+            except Exception:
+                ds["preprocessing"] = None
+        else:
+            ds["preprocessing"] = None
+
         # 2. Ambil data hasil clustering awal (sesi terbaru)
         hc_sql = """
-            SELECT id_clustering, jumlah_cluster, silhouette_score, dbi, created_at::text
+            SELECT id_clustering, jumlah_cluster, silhouette_score, dbi,
+                   waktu_komputasi, created_at::text, evaluasi_perbandingan
             FROM hasil_clustering
             WHERE id_dataset = %s
             ORDER BY id_clustering DESC LIMIT 1;
         """
         hc = query_db(hc_sql, (id_dataset,), one=True)
+        if hc and hc.get("waktu_komputasi") is not None:
+            wk = float(hc["waktu_komputasi"])
+            hc["waktu_komputasi_str"] = f"{wk:.2f}".replace(".", ",") + " detik"
+        elif hc:
+            hc["waktu_komputasi_str"] = "-"
 
         # 3. Ambil data cluster K-Means awal
         clusters_kmeans = []
@@ -301,14 +401,114 @@ def get_dataset_detail(id_dataset):
                     ORDER BY nomor_zona ASC;
                 """
                 zonas_hbcdp = query_db(zk_sql, (ho["id_optimasi"],))
+        # Ambil ringkasan status geocoding dan daftar geocoding gagal
+        geo_counts_sql = """
+            SELECT 
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status_geocoding = 'SUCCESS') AS berhasil,
+                COUNT(*) FILTER (WHERE status_geocoding = 'FAILED') AS gagal,
+                COUNT(*) FILTER (WHERE status_geocoding = 'PENDING') AS pending
+            FROM data_pengiriman
+            WHERE id_dataset = %s;
+        """
+        geo_counts = query_db(geo_counts_sql, (id_dataset,), one=True) or {
+            "total": 0, "berhasil": 0, "gagal": 0, "pending": 0
+        }
+
+        gagal_sql = """
+            SELECT id_pengiriman, nosi, petugas, alamat_asli, alamat_bersih, keterangan_geocoding
+            FROM data_pengiriman
+            WHERE id_dataset = %s AND status_geocoding = 'FAILED'
+            ORDER BY id_pengiriman ASC;
+        """
+        gagal_rows = query_db(gagal_sql, (id_dataset,)) or []
+        gagal_items = [
+            {
+                "no": idx + 1,
+                "resi": r["nosi"] or "-",
+                "petugas": r["petugas"] or "-",
+                "alamat": r["alamat_bersih"] or r["alamat_asli"] or "-",
+                "keterangan": r["keterangan_geocoding"] or "Lokasi tidak ditemukan"
+            }
+            for idx, r in enumerate(gagal_rows)
+        ]
+
+        # Deteksi keberadaan kolom Petugas dari metadata preprocessing
+        prep_summary = ds.get("preprocessing")
+        has_petugas = (
+            bool(prep_summary.get("has_petugas", False))
+            if isinstance(prep_summary, dict)
+            else False
+        )
+
+        geocoding_summary = {
+            "total": geo_counts["total"],
+            "berhasil": geo_counts["berhasil"],
+            "gagal": geo_counts["gagal"],
+            "pending": geo_counts["pending"],
+            "has_petugas": has_petugas,
+            "gagal_items": gagal_items
+        }
+
+        # Hitung poligon batas convex hull via Shapely untuk K-Means dan HBCDP
+        polygons_kmeans = {}
+        polygons_hbcdp = {}
+        if hc:
+            pts_grouped_sql = """
+                SELECT 
+                    dp.latitude,
+                    dp.longitude,
+                    cl.nomor_cluster AS c_init,
+                    COALESCE(ac.nomor_zona, cl.nomor_cluster) AS c_final
+                FROM data_pengiriman dp
+                INNER JOIN anggota_cluster ac ON dp.id_pengiriman = ac.id_pengiriman
+                INNER JOIN cluster cl ON ac.id_cluster = cl.id_cluster
+                WHERE dp.id_dataset = %s AND cl.id_clustering = %s
+                  AND dp.latitude IS NOT NULL AND dp.longitude IS NOT NULL;
+            """
+            pts_grouped = query_db(pts_grouped_sql, (id_dataset, hc["id_clustering"]))
+            if pts_grouped:
+                from collections import defaultdict
+                km_pts_map = defaultdict(list)
+                hb_pts_map = defaultdict(list)
+                for pr in pts_grouped:
+                    latlng = (pr["latitude"], pr["longitude"])
+                    if pr["c_init"] is not None:
+                        km_pts_map[str(pr["c_init"])].append(latlng)
+                    if pr["c_final"] is not None:
+                        hb_pts_map[str(pr["c_final"])].append(latlng)
+                for c_k, c_coords in km_pts_map.items():
+                    polygons_kmeans[c_k] = compute_shapely_hull_latlng(c_coords)
+                for c_k, c_coords in hb_pts_map.items():
+                    polygons_hbcdp[c_k] = compute_shapely_hull_latlng(c_coords)
+
+        aktual = get_actual_evaluation(id_dataset)
+        if aktual and aktual["sidik_data"] != actual_evaluation_service.fingerprint(
+            successful_dataset_points(id_dataset)
+        ):
+            aktual = None
+        perbandingan = hc.pop("evaluasi_perbandingan", None) if hc else None
+        if perbandingan and (
+            not aktual or perbandingan.get("sidik_data") != aktual["sidik_data"]
+        ):
+            perbandingan = None
 
         # Format respon yang terintegrasi dengan frontend
         response_data = {
             "dataset": ds,
+            "aktual": aktual,
+            "perbandingan": perbandingan,
             "clustering": hc,
             "clusters_kmeans": clusters_kmeans,
             "optimasi": ho,
-            "zonas_hbcdp": zonas_hbcdp
+            "zonas_hbcdp": zonas_hbcdp,
+            "geocoding_summary": geocoding_summary,
+            "polygons": {
+                "kmeans": polygons_kmeans,
+                "hbcdp": polygons_hbcdp
+            },
+            "polygons_kmeans": polygons_kmeans,
+            "polygons_hbcdp": polygons_hbcdp
         }
         return jsonify({"success": True, "data": response_data})
     except Exception as e:
@@ -338,6 +538,7 @@ def get_dataset_points(id_dataset):
                 SELECT
                     dp.id_pengiriman,
                     dp.nosi,
+                    dp.petugas,
                     dp.alamat_asli,
                     dp.alamat_bersih,
                     dp.latitude,
@@ -364,6 +565,7 @@ def get_dataset_points(id_dataset):
                 SELECT
                     dp.id_pengiriman,
                     dp.nosi,
+                    dp.petugas,
                     dp.alamat_asli,
                     dp.alamat_bersih,
                     dp.latitude,
@@ -380,14 +582,19 @@ def get_dataset_points(id_dataset):
             params = [id_dataset]
 
         if search:
-            sql += " AND (dp.alamat_asli ILIKE %s OR dp.alamat_bersih ILIKE %s)"
-            params.extend([f"%{search}%", f"%{search}%"])
+            sql += " AND (dp.nosi ILIKE %s OR dp.alamat_asli ILIKE %s OR dp.alamat_bersih ILIKE %s OR dp.petugas ILIKE %s)"
+            params.extend([f"%{search}%"] * 4)
 
 
         # Ambil seluruh titik pengiriman untuk ditampilkan pada peta
         sql += " ORDER BY dp.id_pengiriman ASC;"
 
         points = query_db(sql, params)
+
+        # Normalisasi nama petugas untuk tampilan dashboard
+        for point in points:
+            point["petugas"] = actual_evaluation_service._petugas(point)
+
         return jsonify({
             "success": True,
             "data": points,
@@ -405,7 +612,7 @@ def get_dataset_points(id_dataset):
 
 def read_dataset_rows(file_stream, ext):
     """
-    Membaca dataset pengiriman baik dari format .csv, .xlsx, maupun .xls
+    Membaca dataset pengiriman baik dari format .csv maupun .xlsx
     Mengembalikan: (headers, list of dict rows)
     """
     rows = []
@@ -426,23 +633,7 @@ def read_dataset_rows(file_stream, ext):
                         row_dict[col_name] = str(val).strip() if val is not None else ""
                     rows.append(row_dict)
 
-    elif ext == ".xls":
-        import xlrd
-        content = file_stream.read()
-        book = xlrd.open_workbook(file_contents=content)
-        sheet = book.sheet_by_index(0)
-        if sheet.nrows > 0:
-            headers = [str(sheet.cell_value(0, c)).strip() for c in range(sheet.ncols)]
-            for r in range(1, sheet.nrows):
-                vals = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
-                if any(str(v).strip() != "" for v in vals):
-                    row_dict = {}
-                    for idx, col_name in enumerate(headers):
-                        val = vals[idx] if idx < len(vals) else ""
-                        row_dict[col_name] = str(val).strip()
-                    rows.append(row_dict)
-
-    else:  # .csv
+    elif ext == ".csv":
         content = file_stream.read().decode("utf-8", errors="replace")
         delimiter = ";" if content.splitlines()[0].count(";") > content.splitlines()[0].count(",") else ","
         reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
@@ -455,12 +646,38 @@ def read_dataset_rows(file_stream, ext):
     return headers, rows
 
 
+@app.route("/api/preprocessing/progress/<upload_id>", methods=["GET"])
+def get_preprocessing_progress(upload_id):
+    try:
+        UUID(upload_id)
+    except ValueError:
+        return jsonify({"success": False, "error": "upload_id tidak valid"}), 400
+
+    with preprocessing_progress_lock:
+        progress = preprocessing_progress.get(upload_id)
+        data = dict(progress) if progress else {
+            "total": 0, "processed": 0, "status": "NOT_STARTED"
+        }
+
+    total = data["total"]
+    processed = data["processed"]
+    data["percentage"] = round(processed * 100 / total) if total else 0
+    return jsonify({"success": True, "data": data})
+
+
 @app.route("/api/upload", methods=["POST"])
 def upload_dataset():
     """
     Endpoint menerima file dataset pengiriman (.csv, .xlsx, .xls)
     dan menyimpannya ke tabel dataset serta data_pengiriman dengan pembersihan data otomatis.
     """
+    upload_id = request.form.get("upload_id", "").strip()
+    if upload_id:
+        try:
+            UUID(upload_id)
+        except ValueError:
+            return jsonify({"success": False, "error": "upload_id tidak valid"}), 400
+
     try:
         if "file" not in request.files:
             return jsonify({"success": False, "error": "File tidak ditemukan dalam request"}), 400
@@ -472,8 +689,11 @@ def upload_dataset():
         filename = secure_filename(file.filename)
         ext = os.path.splitext(filename)[1].lower()
 
-        if ext not in [".csv", ".xlsx", ".xls"]:
-            return jsonify({"success": False, "error": "Format file tidak didukung (.csv, .xlsx, .xls)"}), 400
+        if ext not in [".csv", ".xlsx"]:
+            return jsonify({
+                "success": False,
+                "error": "Format file tidak didukung. Harap gunakan format .csv atau .xlsx."
+            }), 400
 
         headers, rows = read_dataset_rows(file.stream, ext)
         if not rows:
@@ -495,9 +715,11 @@ def upload_dataset():
                     "error": f"Format kolom template tidak valid. Kolom '{req}' tidak ditemukan."
                 }), 400
             col_map[req] = matched
+        petugas_col = next((h for h in headers if h.strip().casefold().startswith("petugas")), None)
+        if petugas_col:
+            col_map["Petugas"] = petugas_col
 
         tgl_col = col_map["Tgl Antaran Pertama"]
-        kota_col = col_map["Kota"]
 
         # ============================================================
         # VALIDASI TANGGAL SELURUH BARIS
@@ -515,8 +737,7 @@ def upload_dataset():
                 }), 400
 
             tanggal_obj = None
-
-            for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+            for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%Y/%m/%d"):
                 try:
                     tanggal_obj = datetime.strptime(
                         tanggal_raw.split()[0],
@@ -531,7 +752,7 @@ def upload_dataset():
                     "success": False,
                     "error": (
                         f"Format tanggal tidak valid: '{tanggal_raw}'. "
-                        "Gunakan YYYY-MM-DD atau DD/MM/YYYY."
+                        "Gunakan format hari-bulan-tahun (contoh: 01/08/2025)."
                     )
                 }), 400
 
@@ -540,7 +761,6 @@ def upload_dataset():
             )
 
         unique_dates = set(parsed_dates)
-
         if len(unique_dates) != 1:
             return jsonify({
                 "success": False,
@@ -551,119 +771,48 @@ def upload_dataset():
             }), 400
 
         tanggal_data = parsed_dates[0]
+        tanggal_display = datetime.strptime(tanggal_data, "%Y-%m-%d").strftime("%d/%m/%Y")
 
         # ============================================================
-        # PREPROCESSING DATA
+        # PREPROCESSING DATA (via PreprocessingService)
+        # 1. Pemeriksaan Data Kosong
+        # 2. Pemeriksaan Resi Duplikat
+        # 3. Normalisasi Alamat
         # ============================================================
-        seen_nosi = set()
-        valid_rows = []
-        dup_count = 0
-        umum_count = 0
-        empty_count = 0
-        wilayah_count = 0
-        
-        for r in rows:
-            resi = r.get(col_map["Nosi"], "").strip()
-            alamat = r.get(col_map["Alamat"], "").strip()
-            
+        if upload_id:
+            with preprocessing_progress_lock:
+                if upload_id in preprocessing_progress:
+                    return jsonify({"success": False, "error": "upload_id sudah digunakan"}), 409
+                preprocessing_progress[upload_id] = {
+                    "total": len(rows), "processed": 0, "status": "PROCESSING"
+                }
 
-            # Seleksi wilayah berdasarkan kolom Kota
-            kota = re.sub(
-                r"\s+", " ",
-                str(r.get(kota_col, "")).strip().upper()
+        def report_preprocessing(processed, total):
+            set_preprocessing_progress(
+                upload_id, processed=processed, total=total
             )
 
-            bagian_kota = [
-                p.strip() for p in kota.split(",")
-            ]
-
-            kecamatan_valid = {
-                "KLOJEN",
-                "BLIMBING",
-                "LOWOKWARU",
-                "SUKUN",
-                "KEDUNGKANDANG"
-            }
-
-            nama_kota_valid = {
-                "MALANG",
-                "KOTA MALANG",
-                "MLG",
-                "KOTA MLG"
-            }
-
-            kota_valid = (
-                1 <= len(bagian_kota) <= 3
-                and bagian_kota[0] in nama_kota_valid
-                and (
-                    len(bagian_kota) == 1
-                    or bagian_kota[1] in kecamatan_valid
-                )
-                and (
-                    len(bagian_kota) < 3
-                    or bool(bagian_kota[2])
-                )
-            )
-
-            # Wilayah di luar Kota Malang dieliminasi
-            # tanpa membatalkan upload seluruh file.
-            if not kota_valid:
-                wilayah_count += 1
-                continue
-
-
-            
-            # 1. Eliminasi Nosi atau alamat kosong
-            if not resi or not alamat:
-                empty_count += 1
-                continue
-
-            # 2. Eliminasi alamat yang terlalu umum
-            if geocoding_service.isAlamatTerlaluUmum(alamat):
-                umum_count += 1
-                continue
-
-            # 3. Eliminasi duplikasi Nosi
-            if resi in seen_nosi:
-                dup_count += 1
-                continue
-
-            # 4. Catat Nosi setelah data dinyatakan valid
-            seen_nosi.add(resi)
-
-            # 5. Simpan data yang lolos preprocessing
-            valid_rows.append(
-                (resi, alamat, r.get(tgl_col, "") if tgl_col else "")
-            )
-
-        # ============================================================
-        # REKAPITULASI HASIL PREPROCESSING
-        # ============================================================
-        total_awal = len(rows)
-
-        total_eliminasi = (
-            wilayah_count
-            + empty_count
-            + dup_count
-            + umum_count
+        prep_result = preprocessing_service.proses_dataset(
+            rows, col_map, progress_callback=report_preprocessing
         )
+        set_preprocessing_progress(upload_id, status="SAVING")
+        summary = prep_result["summary"]
+        valid_rows = prep_result["valid_rows"]
 
-        jumlah_data = len(valid_rows)
-
-        # Validasi konsistensi jumlah data
-        if total_awal != jumlah_data + total_eliminasi:
-            return jsonify({
-                "success": False,
-                "error": (
-                    "Terjadi ketidaksesuaian jumlah data "
-                    "pada proses preprocessing."
-                )
-            }), 500
-
+        total_awal = summary["total_awal"]
+        total_eliminasi = summary["total_eliminasi"]
+        total_valid = summary["total_valid"]
+        empty_count = summary["rincian"]["data_kosong"]["count"]
+        wilayah_count = 0
+        dup_count = summary["rincian"]["resi_duplikat"]["count"]
+        umum_count = 0
+        jumlah_data = total_valid
+        preprocessing_json = json.dumps(summary)
 
         # Seluruh data tereliminasi: preprocessing selesai,
         # tetapi tidak ada data yang dapat dilanjutkan.
         if jumlah_data == 0:
+            set_preprocessing_progress(upload_id, status="COMPLETED")
             return jsonify({
                 "success": True,
                 "preprocessing_only": True,
@@ -675,15 +824,18 @@ def upload_dataset():
                 "data": {
                     "id_dataset": None,
                     "nama_file": filename,
-                    "tanggal_data": tanggal_data,
+                    "tanggal_data": tanggal_display,
+                    "tanggal_data_iso": tanggal_data,
                     "total_awal": total_awal,
                     "jumlah_data": 0,
+                    "total_valid": 0,
                     "eliminasi_wilayah": wilayah_count,
                     "eliminasi_kosong": empty_count,
                     "eliminasi_duplikat": dup_count,
                     "eliminasi_alamat_umum": umum_count,
                     "total_eliminasi": total_eliminasi,
-                    "dieliminasi": total_eliminasi
+                    "dieliminasi": total_eliminasi,
+                    "preprocessing": summary
                 }
             }), 200
         
@@ -699,11 +851,12 @@ def upload_dataset():
                 eliminasi_kosong,
                 eliminasi_duplikat,
                 eliminasi_alamat_umum,
-                total_eliminasi
+                total_eliminasi,
+                preprocessing_json
             )
             VALUES (
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id_dataset;
         """
@@ -720,14 +873,25 @@ def upload_dataset():
             empty_count,
             dup_count,
             umum_count,
-            total_eliminasi
+            total_eliminasi,
+            preprocessing_json
         )
+
 
         dp_insert_sql = """
             INSERT INTO data_pengiriman
-                (id_dataset, nosi, alamat_asli, alamat_bersih, status_geocoding)
-            VALUES (%s, %s, %s, %s, %s);
+                (
+                    id_dataset,
+                    nosi,
+                    alamat_asli,
+                    alamat_bersih,
+                    status_geocoding,
+                    petugas,
+                    kota
+                )
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
         """
+
 
         hist_sql = """
             INSERT INTO history_proses
@@ -746,12 +910,10 @@ def upload_dataset():
         )
 
         
+        set_preprocessing_progress(upload_id, status="COMPLETED")
+
         filtered_info = []
 
-        if wilayah_count > 0:
-            filtered_info.append(
-                f"{wilayah_count} data luar wilayah"
-            )
 
         if empty_count > 0:
             filtered_info.append(
@@ -772,30 +934,33 @@ def upload_dataset():
             f" ({', '.join(filtered_info)} dieliminasi)"
             if filtered_info else ""
         )
-
         return jsonify({
             "success": True,
             "message": (
                 f"Dataset {filename} berhasil diunggah: "
-                f"{jumlah_data} data valid tersimpan"
-                f"{info_str}."
+                f"{jumlah_data} data valid siap dilanjutkan, "
+                f"{total_eliminasi} data tereliminasi dari {total_awal} data awal."
             ),
             "data": {
                 "id_dataset": id_dataset,
                 "nama_file": filename,
-                "tanggal_data": tanggal_data,
+                "tanggal_data": tanggal_display,
+                "tanggal_data_iso": tanggal_data,
                 "total_awal": total_awal,
                 "jumlah_data": jumlah_data,
+                "total_valid": jumlah_data,
                 "eliminasi_wilayah": wilayah_count,
                 "eliminasi_kosong": empty_count,
                 "eliminasi_duplikat": dup_count,
                 "eliminasi_alamat_umum": umum_count,
                 "total_eliminasi": total_eliminasi,
-                "dieliminasi": total_eliminasi
+                "dieliminasi": total_eliminasi,
+                "preprocessing": summary
             }
         })
 
     except Exception as e:
+        set_preprocessing_progress(upload_id, status="FAILED", error=str(e))
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -826,18 +991,20 @@ def geocode_dataset_points(id_dataset):
 
         if limit_n is not None:
             pts_sql = """
-                SELECT id_pengiriman, alamat_bersih, alamat_asli, latitude, longitude, x_meter, y_meter 
-                FROM data_pengiriman 
-                WHERE id_dataset = %s 
-                ORDER BY id_pengiriman ASC 
+                SELECT id_pengiriman, nosi, petugas, alamat_bersih,
+                    alamat_asli, kota, latitude, longitude, x_meter, y_meter
+                FROM data_pengiriman
+                WHERE id_dataset = %s
+                ORDER BY id_pengiriman ASC
                 LIMIT %s;
             """
             points = query_db(pts_sql, (id_dataset, limit_n))
         else:
             pts_sql = """
-                SELECT id_pengiriman, alamat_bersih, alamat_asli, latitude, longitude, x_meter, y_meter 
-                FROM data_pengiriman 
-                WHERE id_dataset = %s 
+                SELECT id_pengiriman, nosi, petugas, alamat_bersih,
+                    alamat_asli, kota, latitude, longitude, x_meter, y_meter
+                FROM data_pengiriman
+                WHERE id_dataset = %s
                 ORDER BY id_pengiriman ASC;
             """
             points = query_db(pts_sql, (id_dataset,))
@@ -847,6 +1014,8 @@ def geocode_dataset_points(id_dataset):
 
         # Inisialisasi progres geocoding
         with geocoding_progress_lock:
+            if geocoding_progress.get(id_dataset, {}).get("status") in ("PROCESSING", "EVALUATING_ACTUAL"):
+                return jsonify({"success": False, "error": "Geocoding dataset masih berjalan."}), 409
             geocoding_progress[id_dataset] = {
                 "total": len(points),
                 "processed": 0,
@@ -856,7 +1025,7 @@ def geocode_dataset_points(id_dataset):
         berhasil_baru = 0
         gagal = 0
         berhasil_sudah_ada = 0
-
+        gagal_items = []
         for index, p in enumerate(points):
             lat = p["latitude"]
             lng = p["longitude"]
@@ -886,7 +1055,10 @@ def geocode_dataset_points(id_dataset):
                 or ""
             )
 
-            geo = geocoding_service.geocode(alamat_target)
+            geo = geocoding_service.geocode(
+                alamat_target,
+                p.get("kota") or ""
+            )
 
             koordinat_lengkap = all(
                 geo.get(k) is not None
@@ -919,6 +1091,41 @@ def geocode_dataset_points(id_dataset):
                 )
                 berhasil_baru += 1
             else:
+ 
+                err_raw = str(geo.get("error") or "")
+                err_lower = err_raw.casefold()
+
+                # Google Maps tidak menemukan lokasi
+                if (
+                    "alamat tidak ditemukan" in err_lower
+                    or "zero_results" in err_lower
+                    or "tidak ada kandidat koordinat" in err_lower
+                ):
+                    keterangan = "Lokasi tidak ditemukan"
+
+                # Google Maps menemukan kandidat,
+                # tetapi wilayah administratif bukan Kota Malang
+                elif (
+                    "di luar wilayah kota malang" in err_lower
+                    or "di luar poligon kota malang" in err_lower
+                    or "di luar kota malang" in err_lower
+                ):
+                    keterangan = "Di luar wilayah Kota Malang"
+
+                # Kesalahan API atau koneksi
+                elif (
+                    "api" in err_lower
+                    or "key" in err_lower
+                    or "menghubungi" in err_lower
+                    or "permintaan ditolak" in err_lower
+                    or "batas permintaan" in err_lower
+                ):
+                    keterangan = err_raw or "Permintaan API gagal"
+
+                # Kegagalan lainnya
+                else:
+                    keterangan = err_raw or "Geocoding gagal"
+
                 execute_db(
                     """
                     UPDATE data_pengiriman
@@ -926,18 +1133,33 @@ def geocode_dataset_points(id_dataset):
                         longitude = NULL,
                         x_meter = NULL,
                         y_meter = NULL,
-                        status_geocoding = 'FAILED'
+                        status_geocoding = 'FAILED',
+                        keterangan_geocoding = %s
                     WHERE id_pengiriman = %s
                     """,
-                    (p["id_pengiriman"],)
+                    (keterangan, p["id_pengiriman"])
                 )
                 gagal += 1
-
+                gagal_items.append({
+                    "no": len(gagal_items) + 1,
+                    "resi": p.get("nosi") or "-",
+                    "petugas": p.get("petugas") or "-",
+                    "alamat": alamat_target,
+                    "keterangan": keterangan
+                })
             # Perbarui progres setelah satu alamat selesai diproses
             with geocoding_progress_lock:
                 geocoding_progress[id_dataset]["processed"] = index + 1
 
         total_berhasil = berhasil_baru + berhasil_sudah_ada
+        # Baseline selesai dan tersimpan sebelum respons sukses / tombol clustering siap.
+        with geocoding_progress_lock:
+            geocoding_progress[id_dataset]["status"] = "EVALUATING_ACTUAL"
+        aktual = save_actual_evaluation(
+            id_dataset,
+            actual_evaluation_service.evaluate(successful_dataset_points(id_dataset))
+        )
+
 
         # Tandai proses geocoding telah selesai
         with geocoding_progress_lock:
@@ -951,15 +1173,22 @@ def geocode_dataset_points(id_dataset):
             ),
             "data": {
                 "id_dataset": id_dataset,
+                "aktual": aktual,
                 "total_points": len(points),
-                "successful_points": total_berhasil,
-                "failed_points": gagal,
-                "newly_geocoded": berhasil_baru,
-                "limit_applied": limit_n
+                "total_diproses": len(points),
+                "berhasil": total_berhasil,
+                "gagal": gagal,
+                "gagal_items": gagal_items,
+                "berhasil_baru": berhasil_baru,
+                "berhasil_sudah_ada": berhasil_sudah_ada
             }
         })
 
     except Exception as e:
+        app.logger.exception(
+            "ERROR GEOCODING DATASET %s", id_dataset
+        )
+
         with geocoding_progress_lock:
             if id_dataset in geocoding_progress:
                 geocoding_progress[id_dataset]["status"] = "FAILED"
@@ -1005,19 +1234,19 @@ def get_geocoding_progress(id_dataset):
 @app.route("/api/cluster/<int:id_dataset>", methods=["POST"])
 def run_clustering(id_dataset):
     """
-    Menjalankan alur lengkap K-Means dan optimasi HBCDP pada dataset,
-    mendukung pengaturan batas geocoding (None untuk seluruh data, atau angka N titik).
+    Menjalankan K-Means dan HBCDP pada seluruh titik hasil geocoding.
+    Baseline aktual wajib sudah tersimpan; endpoint ini tidak menghitung ulang aktual.
     """
     try:
         req_data = request.get_json(silent=True) or {}
 
-        # Validasi input jumlah kurir (K)
+        # Validasi K manual, terpisah dari jumlah kurir aktual.
         raw_k = req_data.get("k")
 
         if isinstance(raw_k, bool):
             return jsonify({
                 "success": False,
-                "error": "Jumlah kurir (K) harus berupa bilangan bulat."
+                "error": "Jumlah cluster (K) harus berupa bilangan bulat."
             }), 400
 
         try:
@@ -1032,55 +1261,21 @@ def run_clustering(id_dataset):
         except (TypeError, ValueError):
             return jsonify({
                 "success": False,
-                "error": "Jumlah kurir (K) wajib diisi dengan bilangan bulat."
+                "error": "Jumlah cluster (K) wajib diisi dengan bilangan bulat."
             }), 400
 
-        # Pengaturan batas data geocoding: None = seluruh data, angka = batasi N titik
-        # Pengaturan batas data geocoding: Diambil default dari Config.GEOCODING_LIMIT (dari .env)
-        # Jika .env disetel ke None/kosong, memproses seluruh data
-        # Jika .env disetel ke angka (contoh: 22), membatasi N data
-        raw_limit = req_data.get("limit")
-        if raw_limit is None:
-            limit_n = Config.GEOCODING_LIMIT
-        elif str(raw_limit).strip().lower() in ("", "none", "null", "all", "semua"):
-            limit_n = None
-        else:
-            try:
-                limit_n = int(raw_limit)
-                if limit_n <= 0:
-                    limit_n = None
-            except (ValueError, TypeError):
-                limit_n = Config.GEOCODING_LIMIT
 
        
-        # Hanya ambil titik yang berhasil di-geocoding
-        pts_sql = """
-            SELECT
-                id_pengiriman,
-                alamat_bersih,
-                alamat_asli,
-                latitude,
-                longitude,
-                x_meter,
-                y_meter
-            FROM data_pengiriman
-            WHERE id_dataset = %s
-              AND status_geocoding = 'SUCCESS'
-              AND latitude IS NOT NULL
-              AND longitude IS NOT NULL
-              AND x_meter IS NOT NULL
-              AND y_meter IS NOT NULL
-            ORDER BY id_pengiriman ASC
-        """
-
-        params = [id_dataset]
-
-        # Batas jumlah titik hanya untuk testing
-        if limit_n is not None:
-            pts_sql += " LIMIT %s"
-            params.append(limit_n)
-
-        points = query_db(pts_sql, tuple(params))
+        with geocoding_progress_lock:
+            if geocoding_progress.get(id_dataset, {}).get("status") in ("PROCESSING", "EVALUATING_ACTUAL"):
+                return jsonify({"success": False, "error": "Tunggu geocoding dan evaluasi aktual selesai."}), 409
+        points = successful_dataset_points(id_dataset)
+        aktual = get_actual_evaluation(id_dataset)
+        if not aktual or aktual["sidik_data"] != actual_evaluation_service.fingerprint(points):
+            return jsonify({
+                "success": False,
+                "error": "Baseline aktual belum tersedia atau data berubah. Selesaikan geocoding sebelum clustering."
+            }), 409
 
         n_valid = len(points)
 
@@ -1102,6 +1297,8 @@ def run_clustering(id_dataset):
         # 1. Bersihkan hasil clustering sebelumnya untuk dataset ini agar tidak ada duplikasi
         execute_db("DELETE FROM hasil_clustering WHERE id_dataset = %s;", (id_dataset,))
 
+        t_start = time.perf_counter()
+
         # 2. Jalankan KMeansService
         km_result = kmeans_service.clustering(coords, k=k)
         km_eval = kmeans_service.evaluasiCluster(coords, km_result["labels"], km_result["centroids"], k=k)
@@ -1109,12 +1306,28 @@ def run_clustering(id_dataset):
         # 3. Jalankan HBCDPService
         hb_result = hbcdp_service.optimasi(coords, km_result["labels"], km_result["centroids"], k=k)
 
+        t_end = time.perf_counter()
+        waktu_komputasi = round(t_end - t_start, 2)
+        waktu_komputasi_str = f"{waktu_komputasi:.2f}".replace(".", ",") + " detik"
+
+        # Evaluasi pembanding memakai resi yang sama, tanpa clustering ulang.
+        perbandingan = actual_evaluation_service.compare(
+            points, km_result["labels"], hb_result["final_labels"], k
+        )
+        perbandingan["sidik_data"] = aktual["sidik_data"]
+
         # 4. Simpan hasil_clustering ke DB
         hc_sql = """
-            INSERT INTO hasil_clustering (id_dataset, jumlah_cluster, silhouette_score, dbi)
-            VALUES (%s, %s, %s, %s) RETURNING id_clustering;
+            INSERT INTO hasil_clustering (
+                id_dataset, jumlah_cluster, silhouette_score, dbi,
+                waktu_komputasi, evaluasi_perbandingan
+            ) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_clustering;
         """
-        id_clustering = execute_db(hc_sql, (id_dataset, k, km_eval["silhouette_score"], km_eval["dbi"]), returning_id=True)
+        from psycopg2.extras import Json
+        id_clustering = execute_db(hc_sql, (
+            id_dataset, k, km_eval["silhouette_score"], km_eval["dbi"],
+            waktu_komputasi, Json(perbandingan)
+        ), returning_id=True)
 
         cluster_ids = []
         for c_idx, (cx, cy) in enumerate(km_result["centroids"]):
@@ -1157,37 +1370,36 @@ def run_clustering(id_dataset):
             returning_id=True
         )
 
-        # 7. Simpan zona_kurir poligon batas geografis (GeoJSON WGS84)
+        # 7. Hitung poligon batas convex hull via Shapely untuk K-Means dan HBCDP
+        polygons_kmeans = {}
+        polygons_hbcdp = {}
+        for c_idx in range(k):
+            c_num = str(c_idx + 1)
+            km_pts = [
+                (float(p["latitude"]), float(p["longitude"]))
+                for i, p in enumerate(points)
+                if km_result["labels"][i] == c_idx and p["latitude"] is not None and p["longitude"] is not None
+            ]
+            hb_pts = [
+                (float(p["latitude"]), float(p["longitude"]))
+                for i, p in enumerate(points)
+                if hb_result["final_labels"][i] == c_idx and p["latitude"] is not None and p["longitude"] is not None
+            ]
+            polygons_kmeans[c_num] = compute_shapely_hull_latlng(km_pts)
+            polygons_hbcdp[c_num] = compute_shapely_hull_latlng(hb_pts)
+
+        # Simpan zona_kurir poligon batas geografis ke PostgreSQL
         zk_sql = """
             INSERT INTO zona_kurir (id_optimasi, nomor_zona, jumlah_anggota, polygon)
             VALUES (%s, %s, %s, %s);
         """
         for z in hb_result["zonas"]:
             z_num = z["nomor_zona"]
-            # Kumpulkan koordinat titik geografis dalam zona ini
-            z_pts = [
-                (float(p["longitude"]), float(p["latitude"]))
-                for i, p in enumerate(points)
-                if (hb_result["final_labels"][i] + 1) == z_num and p["longitude"] is not None and p["latitude"] is not None
-            ]
-            if len(z_pts) >= 3:
-                try:
-                    hull_geom = MultiPoint(z_pts).convex_hull
-                    if hull_geom.geom_type == "Polygon":
-                        poly_coords = list(hull_geom.exterior.coords)
-                        poly_str = json.dumps({"type": "Polygon", "coordinates": [[[c[0], c[1]] for c in poly_coords]]})
-                    else:
-                        poly_str = json.dumps({"type": "Polygon", "coordinates": [[[p[0], p[1]] for p in z_pts]]})
-                except Exception:
-                    poly_str = json.dumps({"type": "Polygon", "coordinates": [[[p[0], p[1]] for p in z_pts]]})
-            elif len(z_pts) > 0:
-                poly_str = json.dumps({"type": "Polygon", "coordinates": [[[p[0], p[1]] for p in z_pts]]})
-            else:
-                poly_str = json.dumps({"type": "Polygon", "coordinates": []})
-
+            poly_coords = polygons_hbcdp.get(str(z_num), [])
+            poly_str = json.dumps({"type": "Polygon", "coordinates": poly_coords})
             execute_db(zk_sql, (id_optimasi, z_num, z["jumlah_anggota"], poly_str))
 
-        execute_db("UPDATE dataset SET status='COMPLETED' WHERE id_dataset=%s;", (id_dataset,))
+        execute_db("UPDATE dataset SET status='COMPLETED', jumlah_kurir=%s WHERE id_dataset=%s;", (k, id_dataset))
         execute_db("INSERT INTO history_proses (id_dataset, id_clustering, id_optimasi, jenis_proses, status) VALUES (%s, %s, %s, %s, %s);",
                    (id_dataset, id_clustering, id_optimasi, "HBCDP_OPTIMIZATION", "COMPLETED"))
 
@@ -1197,13 +1409,25 @@ def run_clustering(id_dataset):
             "data": {
                 "id_clustering": id_clustering,
                 "id_optimasi": id_optimasi,
+                "aktual": aktual,
+                "perbandingan": perbandingan,
                 "k": k,
+                "jumlah_kurir": k,
+                "n": n_valid,
+                "waktu_komputasi": waktu_komputasi,
+                "waktu_komputasi_str": waktu_komputasi_str,
                 "evaluasi_kmeans": km_eval,
                 "evaluasi_hbcdp": {
                     "z1": hb_result["z1_final"],
                     "z2": hb_result["z2_final"],
                     "steps": hb_result["steps"]
-                }
+                },
+                "polygons": {
+                    "kmeans": polygons_kmeans,
+                    "hbcdp": polygons_hbcdp
+                },
+                "polygons_kmeans": polygons_kmeans,
+                "polygons_hbcdp": polygons_hbcdp
             }
         })
     except Exception as e:
@@ -1217,7 +1441,7 @@ def run_clustering(id_dataset):
 @app.route("/api/download/template/<format_type>")
 def download_template(format_type):
     """Menyediakan unduhan template file dataset pengiriman (CSV / Excel .xlsx asli)."""
-    if format_type.lower() in ["excel", "xlsx", "xls"]:
+    if format_type.lower() in ["excel", "xlsx"]:
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {"in_memory": True})
         worksheet = workbook.add_worksheet("Template Pengiriman")
@@ -1240,16 +1464,16 @@ def download_template(format_type):
             "valign": "vcenter"
         })
 
-        headers = ["No.", "Nosi", "Tgl Antaran Pertama", "Alamat", "Kota"]
+        headers = ["No.", "Nosi", "Tgl Antaran Pertama", "Alamat", "Kota", "Petugas"]
         for col_idx, h in enumerate(headers):
             worksheet.write(0, col_idx, h, header_format)
 
         sample_rows = [
-            [1, "nosi_1", "2025-08-01", "Jl. Contoh No. 1", "Malang"],
-            [2, "nosi_2", "2025-08-01", "Jl. Contoh No. 2", "Malang"],
-            [3, "nosi_3", "2025-08-01", "Jl. Contoh No. 3", "Malang"],
-            [4, "nosi_4", "2025-08-01", "Jl. Contoh No. 4", "Malang"],
-            [5, "nosi_5", "2025-08-01", "Jl. Contoh No. 5", "Malang"],
+            [1, "nosi_1", "01/08/2025", "Jl. Contoh No. 1", "Malang", "Kurir A"],
+            [2, "nosi_2", "01/08/2025", "Jl. Contoh No. 2", "Malang", "Kurir B"],
+            [3, "nosi_3", "01/08/2025", "Jl. Contoh No. 3", "Malang", "Kurir A"],
+            [4, "nosi_4", "01/08/2025", "Jl. Contoh No. 4", "Malang", "Kurir B"],
+            [5, "nosi_5", "01/08/2025", "Jl. Contoh No. 5", "Malang", ""],
         ]
 
         for r_idx, row in enumerate(sample_rows, start=1):
@@ -1259,11 +1483,13 @@ def download_template(format_type):
             worksheet.write(r_idx, 3, row[3], cell_format)
             worksheet.write(r_idx, 4, row[4], cell_format)
 
+            worksheet.write(r_idx, 5, row[5], cell_format)
         worksheet.set_column(0, 0, 6)
         worksheet.set_column(1, 1, 14)
         worksheet.set_column(2, 2, 22)
         worksheet.set_column(3, 3, 35)
         worksheet.set_column(4, 4, 15)
+        worksheet.set_column(5, 5, 20)
 
         workbook.close()
         output.seek(0)
@@ -1276,12 +1502,12 @@ def download_template(format_type):
         )
     else:
         csv_text = (
-            "No.,Nosi,Tgl Antaran Pertama,Alamat,Kota\n"
-            "1,nosi_1,2025-08-01,Jl. Contoh No. 1,Malang\n"
-            "2,nosi_2,2025-08-01,Jl. Contoh No. 2,Malang\n"
-            "3,nosi_3,2025-08-01,Jl. Contoh No. 3,Malang\n"
-            "4,nosi_4,2025-08-01,Jl. Contoh No. 4,Malang\n"
-            "5,nosi_5,2025-08-01,Jl. Contoh No. 5,Malang\n"
+            "No.,Nosi,Tgl Antaran Pertama,Alamat,Kota,Petugas\n"
+            "1,nosi_1,01/08/2025,Jl. Contoh No. 1,Malang,Kurir A\n"
+            "2,nosi_2,01/08/2025,Jl. Contoh No. 2,Malang,Kurir B\n"
+            "3,nosi_3,01/08/2025,Jl. Contoh No. 3,Malang,Kurir A\n"
+            "4,nosi_4,01/08/2025,Jl. Contoh No. 4,Malang,Kurir B\n"
+            "5,nosi_5,01/08/2025,Jl. Contoh No. 5,Malang,\n"
         )
         mem = io.BytesIO(csv_text.encode("utf-8"))
         return send_file(
@@ -1297,42 +1523,62 @@ def export_result_csv(id_dataset):
     """Mengekspor seluruh data pengiriman beserta zona cluster hasil akhir sebagai file CSV atau Excel."""
     try:
         format_type = request.args.get("format", "csv").lower()
+
         sql = """
-            SELECT 
+            SELECT
                 dp.id_pengiriman,
                 dp.nosi,
+                dp.petugas,
                 dp.alamat_asli,
                 dp.alamat_bersih,
                 dp.latitude,
                 dp.longitude,
                 cl.nomor_cluster AS cluster_awal,
-COALESCE(ac.nomor_zona, cl.nomor_cluster) AS cluster_final,
-CASE
-    WHEN cl.nomor_cluster IS NULL THEN 'Belum Diproses'
-    WHEN ac.nomor_zona IS NOT NULL
-         AND ac.nomor_zona != cl.nomor_cluster THEN 'Berpindah'
-    ELSE 'Tetap'
-END AS status
+                COALESCE(ac.nomor_zona, cl.nomor_cluster) AS cluster_final,
+                CASE
+                    WHEN ac.nomor_zona IS NOT NULL
+                         AND ac.nomor_zona != cl.nomor_cluster
+                    THEN 'Berpindah'
+                    ELSE 'Tetap'
+                END AS status
             FROM data_pengiriman dp
-            LEFT JOIN (
-                SELECT ac_sub.id_pengiriman, ac_sub.id_cluster, ac_sub.nomor_zona
-                FROM anggota_cluster ac_sub
-                JOIN cluster cl_sub ON ac_sub.id_cluster = cl_sub.id_cluster
-                WHERE cl_sub.id_clustering = (
-                    SELECT hc.id_clustering FROM hasil_clustering hc 
-                    WHERE hc.id_dataset = %s 
-                    ORDER BY hc.id_clustering DESC LIMIT 1
-                )
-            ) ac ON dp.id_pengiriman = ac.id_pengiriman
-            LEFT JOIN cluster cl ON ac.id_cluster = cl.id_cluster
+            INNER JOIN anggota_cluster ac
+                ON dp.id_pengiriman = ac.id_pengiriman
+            INNER JOIN cluster cl
+                ON ac.id_cluster = cl.id_cluster
             WHERE dp.id_dataset = %s
+              AND cl.id_clustering = (
+                  SELECT hc.id_clustering
+                  FROM hasil_clustering hc
+                  WHERE hc.id_dataset = %s
+                  ORDER BY hc.id_clustering DESC
+                  LIMIT 1
+              )
+              AND dp.status_geocoding = 'SUCCESS'
+              AND dp.latitude IS NOT NULL
+              AND dp.longitude IS NOT NULL
+              AND dp.x_meter IS NOT NULL
+              AND dp.y_meter IS NOT NULL
             ORDER BY dp.id_pengiriman ASC;
         """
         rows = query_db(sql, (id_dataset, id_dataset))
-        if not rows:
-            return jsonify({"success": False, "error": "Dataset tidak ditemukan"}), 404
 
-        if format_type in ["excel", "xlsx", "xls"]:
+        ds_tgl_row = query_db("SELECT tanggal_data::text FROM dataset WHERE id_dataset = %s;", (id_dataset,), one=True)
+        tgl_str = "-"
+        if ds_tgl_row and ds_tgl_row.get("tanggal_data"):
+            try:
+                tgl_str = datetime.strptime(str(ds_tgl_row["tanggal_data"]), "%Y-%m-%d").strftime("%d/%m/%Y")
+            except Exception:
+                tgl_str = str(ds_tgl_row["tanggal_data"])
+
+
+        if not rows:
+            return jsonify({
+                "success": False,
+                "error": "Belum ada titik hasil clustering yang dapat diekspor."
+            }), 409
+
+        if format_type in ["excel", "xlsx"]:
             output = io.BytesIO()
             workbook = xlsxwriter.Workbook(output, {"in_memory": True})
             worksheet = workbook.add_worksheet("Hasil Zonasi")
@@ -1348,7 +1594,7 @@ END AS status
             cell_format = workbook.add_format({"border": 1, "valign": "vcenter"})
             center_format = workbook.add_format({"border": 1, "align": "center", "valign": "vcenter"})
 
-            headers = ["No", "No Resi", "Alamat Asli", "Alamat Bersih", "Latitude", "Longitude", "Cluster_KMeans", "Cluster_HBCDP", "Status"]
+            headers = ["No", "No Resi", "Tgl Antaran Pertama", "Alamat Asli", "Alamat Bersih", "Latitude", "Longitude", "Cluster_KMeans", "Cluster_HBCDP", "Status", "Petugas Aktual"]
             for col_idx, h in enumerate(headers):
                 worksheet.write(0, col_idx, h, header_format)
 
@@ -1356,13 +1602,15 @@ END AS status
                 resi = r["nosi"] or ""
                 worksheet.write(idx + 1, 0, idx + 1, center_format)
                 worksheet.write(idx + 1, 1, resi, center_format)
-                worksheet.write(idx + 1, 2, r["alamat_asli"], cell_format)
-                worksheet.write(idx + 1, 3, r["alamat_bersih"], cell_format)
-                worksheet.write(idx + 1, 4, r["latitude"], cell_format)
-                worksheet.write(idx + 1, 5, r["longitude"], cell_format)
-                worksheet.write(idx + 1, 6, f"Cluster {r['cluster_awal']}" if r["cluster_awal"] is not None else "", center_format)
-                worksheet.write(idx + 1, 7, f"Cluster {r['cluster_final']}" if r["cluster_final"] is not None else "", center_format)
-                worksheet.write(idx + 1, 8, r["status"], center_format)
+                worksheet.write(idx + 1, 2, tgl_str, center_format)
+                worksheet.write(idx + 1, 3, r["alamat_asli"], cell_format)
+                worksheet.write(idx + 1, 4, r["alamat_bersih"], cell_format)
+                worksheet.write(idx + 1, 5, r["latitude"], cell_format)
+                worksheet.write(idx + 1, 6, r["longitude"], cell_format)
+                worksheet.write(idx + 1, 7, f"Cluster {r['cluster_awal']}" if r["cluster_awal"] is not None else "", center_format)
+                worksheet.write(idx + 1, 8, f"Cluster {r['cluster_final']}" if r["cluster_final"] is not None else "", center_format)
+                worksheet.write(idx + 1, 9, r["status"], center_format)
+                worksheet.write(idx + 1, 10, r["petugas"] or "", cell_format)
 
             worksheet.set_column(0, 0, 6)
             worksheet.set_column(1, 1, 16)
@@ -1370,6 +1618,7 @@ END AS status
             worksheet.set_column(4, 5, 12)
             worksheet.set_column(6, 7, 16)
             worksheet.set_column(8, 8, 12)
+            worksheet.set_column(10, 10, 24)
 
             workbook.close()
             output.seek(0)
@@ -1382,20 +1631,22 @@ END AS status
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["No", "No Resi", "Alamat Asli", "Alamat Bersih", "Latitude", "Longitude", "Cluster_KMeans", "Cluster_HBCDP", "Status"])
+        writer.writerow(["No", "No Resi", "Tgl Antaran Pertama", "Alamat Asli", "Alamat Bersih", "Latitude", "Longitude", "Cluster_KMeans", "Cluster_HBCDP", "Status", "Petugas Aktual"])
 
         for idx, r in enumerate(rows):
             resi = r["nosi"] or ""
             writer.writerow([
                 idx + 1,
                 resi,
+                tgl_str,
                 r["alamat_asli"],
                 r["alamat_bersih"],
                 r["latitude"],
                 r["longitude"],
                 f"Cluster {r['cluster_awal']}" if r["cluster_awal"] is not None else "",
                 f"Cluster {r['cluster_final']}" if r["cluster_final"] is not None else "",
-                r["status"]
+                r["status"],
+                r["petugas"] or ""
             ])
 
         mem = io.BytesIO(output.getvalue().encode("utf-8"))
@@ -1408,6 +1659,348 @@ END AS status
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+
+# ============================================================================
+# REST API: Ekspor Peta PNG menggunakan Playwright
+# ============================================================================
+
+@app.route("/api/download/map/<int:id_dataset>/<mode>", methods=["GET"])
+def export_map_png(id_dataset, mode):
+    import math
+    from playwright.sync_api import sync_playwright
+
+    filenames = {
+        "aktual": "Peta_Aktual_PT_Pos.png",
+        "kmeans": "Peta_KMeans_Awal.png",
+        "hbcdp": "Peta_HBCDP_Hasil_Akhir.png"
+    }
+
+    if mode not in filenames:
+        return jsonify({
+            "success": False,
+            "error": "Jenis peta tidak valid."
+        }), 400
+
+    # Pastikan dataset benar-benar ada.
+    dataset = query_db(
+        "SELECT id_dataset FROM dataset WHERE id_dataset = %s;",
+        (id_dataset,),
+        one=True
+    )
+
+    if not dataset:
+        return jsonify({
+            "success": False,
+            "error": "Dataset tidak ditemukan."
+        }), 404
+
+    try:
+        map_width = int(request.args.get("width", 1600))
+        map_height = int(request.args.get("height", 900))
+
+        if not (320 <= map_width <= 2560):
+            raise ValueError("Lebar peta tidak valid.")
+
+        if not (240 <= map_height <= 1600):
+            raise ValueError("Tinggi peta tidak valid.")
+
+        viewport_width = max(map_width, 1280)
+        viewport_height = max(map_height, 900)
+
+        lat_raw = request.args.get("lat")
+        lng_raw = request.args.get("lng")
+        zoom_raw = request.args.get("zoom")
+
+        has_map_position = all(
+            value is not None
+            for value in (lat_raw, lng_raw, zoom_raw)
+        )
+
+        if has_map_position:
+            lat = float(lat_raw)
+            lng = float(lng_raw)
+            zoom = int(zoom_raw)
+
+            if not (
+                math.isfinite(lat)
+                and math.isfinite(lng)
+                and -90 <= lat <= 90
+                and -180 <= lng <= 180
+                and 1 <= zoom <= 19
+            ):
+                raise ValueError("Posisi peta tidak valid.")
+        elif any(
+            value is not None
+            for value in (lat_raw, lng_raw, zoom_raw)
+        ):
+            raise ValueError(
+                "Latitude, longitude, dan zoom harus dikirim bersama."
+            )
+
+    except (ValueError, TypeError) as error:
+        return jsonify({
+            "success": False,
+            "error": str(error)
+        }), 400
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox"]
+            )
+
+            try:
+                page = browser.new_page(
+                    viewport={
+                        "width": viewport_width,
+                        "height": viewport_height
+                    },
+                    device_scale_factor=1
+                )
+
+                # Buka halaman dari dalam container Flask.
+                url = f"http://127.0.0.1:{Config.PORT}/zona"
+
+                page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=30000
+                )
+
+                # Tunggu daftar dataset selesai dimuat.
+                page.wait_for_function(
+                    """datasetId => {
+                        const selector = document.getElementById(
+                            'select-process-dashboard'
+                        );
+
+                        return selector &&
+                            Array.from(selector.options).some(
+                                option => option.value === `db_${datasetId}`
+                            );
+                    }""",
+                    arg=id_dataset,
+                    timeout=30000
+                )
+
+                # Pilih dataset yang akan diekspor.
+                page.evaluate(
+                    """datasetId => {
+                        const selector = document.getElementById(
+                            'select-process-dashboard'
+                        );
+
+                        if (!selector) {
+                            throw new Error('Dropdown dataset tidak ditemukan.');
+                        }
+
+                        selector.value = `db_${datasetId}`;
+
+                        selector.dispatchEvent(
+                            new Event('change', { bubbles: true })
+                        );
+                    }""",
+                    id_dataset
+                )
+
+                # Tunggu titik dataset tersedia di frontend.
+                page.wait_for_function(
+                    """datasetId => {
+                        const key = `db_${datasetId}`;
+
+                        return (
+                            typeof DATASETS !== 'undefined' &&
+                            DATASETS[key] &&
+                            Array.isArray(DATASETS[key].points) &&
+                            DATASETS[key].points.length > 0
+                        );
+                    }""",
+                    arg=id_dataset,
+                    timeout=30000
+                )
+
+                # Pilih tab peta.
+                tab_ids = {
+                    "aktual": "#tab-aktual",
+                    "kmeans": "#tab-kmeans",
+                    "hbcdp": "#tab-hbcdp"
+                }
+
+                page.locator(tab_ids[mode]).click()
+
+                # Tunggu proses render cluster yang dijadwalkan JavaScript.
+                page.wait_for_timeout(1000)
+
+                # Tunggu peta Leaflet dan titiknya dirender.
+                page.wait_for_function(
+                    """() => {
+                        const map = document.getElementById(
+                            'map-zona-large'
+                        );
+
+                        return map &&
+                            map.classList.contains('leaflet-container') &&
+                            map.querySelectorAll(
+                                '.leaflet-interactive, .leaflet-marker-icon'
+                            ).length > 0;
+                    }""",
+                    timeout=30000
+                )
+
+                # Samakan ukuran peta dengan tampilan frontend.
+                page.evaluate(
+                    """size => {
+                        const element = document.getElementById(
+                            'map-zona-large'
+                        );
+
+                        const map = mapManager.maps['map-zona-large'];
+
+                        if (!element || !map) {
+                            throw new Error('Peta Leaflet belum tersedia.');
+                        }
+
+                        element.style.width = `${size.width}px`;
+                        element.style.height = `${size.height}px`;
+
+                        map.invalidateSize({
+                            pan: false,
+                            animate: false
+                        });
+                    }""",
+                    {
+                        "width": map_width,
+                        "height": map_height
+                    }
+                )
+
+                # Terapkan posisi dan zoom yang sedang dilihat pengguna.
+                if has_map_position:
+                    page.evaluate(
+                        """position => {
+                            const map = mapManager.maps['map-zona-large'];
+
+                            map.stop();
+                            map.closePopup();
+
+                            map.setView(
+                                [position.lat, position.lng],
+                                position.zoom,
+                                { animate: false }
+                            );
+                        }""",
+                        {
+                            "lat": lat,
+                            "lng": lng,
+                            "zoom": zoom
+                        }
+                    )
+
+                # Tunggu tile peta selesai dimuat.
+                try:
+                    page.wait_for_function(
+                        """() => {
+                            const element = document.getElementById(
+                                'map-zona-large'
+                            );
+
+                            if (!element) return false;
+
+                            const tiles = Array.from(
+                                element.querySelectorAll('.leaflet-tile')
+                            );
+
+                            return tiles.length > 0 &&
+                                tiles.every(tile => tile.complete);
+                        }""",
+                        timeout=15000
+                    )
+                except Exception:
+                    app.logger.warning(
+                        "Sebagian tile peta belum selesai dimuat."
+                    )
+
+                # Beri kesempatan Leaflet menyelesaikan rendering.
+                page.wait_for_timeout(500)
+
+                # Pastikan render ulang tidak mengubah posisi dan zoom.
+                if has_map_position:
+                    actual_position = page.evaluate(
+                        """() => {
+                            const map = mapManager.maps['map-zona-large'];
+                            const center = map.getCenter();
+
+                            return {
+                                lat: center.lat,
+                                lng: center.lng,
+                                zoom: map.getZoom()
+                            };
+                        }"""
+                    )
+
+                    app.logger.info(
+                        "Ekspor peta: diminta=(%s, %s, %s), aktual=%s",
+                        lat,
+                        lng,
+                        zoom,
+                        actual_position
+                    )
+
+                    if (
+                        actual_position["zoom"] != zoom
+                        or abs(actual_position["lat"] - lat) > 0.000001
+                        or abs(actual_position["lng"] - lng) > 0.000001
+                    ):
+                        page.evaluate(
+                            """position => {
+                                const map = mapManager.maps['map-zona-large'];
+
+                                map.stop();
+                                map.setView(
+                                    [position.lat, position.lng],
+                                    position.zoom,
+                                    { animate: false }
+                                );
+                            }""",
+                            {"lat": lat, "lng": lng, "zoom": zoom}
+                        )
+
+                        page.wait_for_timeout(1000)
+
+                # Ambil elemen peta saja, tanpa dashboard.
+                png_bytes = page.locator(
+                    "#map-zona-large"
+                ).screenshot(
+                    type="png",
+                    animations="disabled",
+                    timeout=30000
+                )
+
+            finally:
+                browser.close()
+
+        return send_file(
+            io.BytesIO(png_bytes),
+            mimetype="image/png",
+            as_attachment=True,
+            download_name=filenames[mode]
+        )
+
+    except Exception:
+        app.logger.exception(
+            "Gagal mengekspor peta dataset %s mode %s",
+            id_dataset,
+            mode
+        )
+
+        return jsonify({
+            "success": False,
+            "error": (
+                "Ekspor peta gagal. Periksa log Flask untuk detail."
+            )
+        }), 500
 
 @app.route("/api/health")
 def healthcheck():

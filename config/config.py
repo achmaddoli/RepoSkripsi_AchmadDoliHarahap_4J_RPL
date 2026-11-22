@@ -9,8 +9,8 @@ class Config:
     # Google Maps Platform Configuration (Geocoding & Map Rendering)
     GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 
-    # Batas Jumlah Data Geocoding & Modeling
-    # None = memproses seluruh data; angka (misal 22, 50, 100) = membatasi N data
+    # Batas geocoding saja; clustering memakai seluruh titik SUCCESS.
+    # None = seluruh data; angka = batasi banyak baris yang diperiksa.
     _raw_limit = os.getenv("GEOCODING_LIMIT", "None")
     GEOCODING_LIMIT = int(_raw_limit) if (_raw_limit and str(_raw_limit).strip().lower() not in ("", "none", "null", "all", "semua") and _raw_limit.strip().isdigit()) else None
 

@@ -9,8 +9,7 @@ EPS_Z2 = 1e-6
 
 class HBCDPService:
     """
-    HBCDPService mengimplementasikan 100% algoritma Calvete, Galé & Iranzo
-    sesuai modul riset Bab II & Bab III Notebook 17_Oktober_2026.ipynb:
+    HBCDPService:
       - Algorithm 1 : Step 1 direct reassignment (memperbaiki Z1)
       - Algorithm 2 : Step 2 path reassignment dengan BFS (memperbaiki Z1)
       - Algorithm 3 : Step 3 pairwise exchange (memperbaiki Z2 dengan cardinality tetap)

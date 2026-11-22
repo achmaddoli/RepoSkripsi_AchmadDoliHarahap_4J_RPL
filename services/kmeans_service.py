@@ -25,10 +25,10 @@ class KMeansService:
             return {"labels": [], "centroids": [], "counts": []}
 
         if n <= k:
-            labels = list(range(n))
-            centroids = [list(X[i]) for i in range(n)]
-            counts = [1] * n
-            return {"labels": labels, "centroids": centroids, "counts": counts}
+            raise ValueError(
+                f"Jumlah titik valid = {n}, sedangkan K = {k}. "
+                "Clustering memerlukan jumlah titik valid lebih besar dari K."
+            )
 
         kmeans = KMeans(
             n_clusters=k,
@@ -55,23 +55,29 @@ class KMeansService:
 
     def evaluasiCluster(self, points, labels, centroids, k: int):
         """
-        Evaluasi metrik cluster sesuai formula Bab II & Bab III notebook:
-        - Silhouette Score (Persamaan 2.33)
-        - Davies-Bouldin Index (Persamaan 2.34-2.36)
-        - Z1 variansi cardinality (Persamaan 2.37)
+        Evaluasi metrik cluster:
+        - Silhouette Score 
+        - Davies-Bouldin Index 
+        - Z1 variansi cardinality
         """
         X = np.asarray(points, dtype=float)
         labels_arr = np.asarray(labels, dtype=int)
         unique_labels = np.unique(labels_arr)
 
-        sil = 0.0
-        dbi = 0.0
-        if len(unique_labels) >= 2 and len(unique_labels) < len(X):
-            try:
-                sil = float(silhouette_score(X, labels_arr))
-                dbi = float(davies_bouldin_score(X, labels_arr))
-            except Exception:
-                pass
+        if not (2 <= len(unique_labels) < len(X)):
+            raise ValueError(
+                "Evaluasi cluster tidak dapat dilakukan: "
+                "jumlah cluster unik harus minimal 2 "
+                "dan lebih kecil daripada jumlah titik."
+            )
+
+        try:
+            sil = float(silhouette_score(X, labels_arr))
+            dbi = float(davies_bouldin_score(X, labels_arr))
+        except Exception as e:
+            raise ValueError(
+                f"Gagal menghitung Silhouette Score atau DBI: {e}"
+            ) from e
 
         counts = np.bincount(labels_arr, minlength=k)
         mean_n = np.mean(counts)

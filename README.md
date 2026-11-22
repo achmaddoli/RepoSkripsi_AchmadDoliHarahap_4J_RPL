@@ -1,5 +1,45 @@
 # 📦 Spatial Package Delivery Zone Clustering Using Balanced K-Means
 
+## Baseline aktual PT Pos dan deployment terpisah
+
+Jalankan dari root proyek:
+
+```sh
+docker compose up -d --build
+docker compose exec -T web python migrate.py up
+docker compose exec -T web python migrate.py status
+docker compose exec -T -e GEOKURIR_INTEGRATION_TESTS=1 web python -m unittest discover -s tests -v
+```
+
+Compose memakai proyek `geokurir-actual`, website `http://127.0.0.1:5001`,
+PostgreSQL host port `5433`, dan Adminer `http://127.0.0.1:8081`.
+Volume `geokurir-actual_postgres_data` terpisah dari deployment lain.
+Container web menjalankan migrasi `up` sebelum aplikasi mulai. Migrasi ini
+menambah struktur tanpa menghapus dataset; jangan gunakan `fresh` untuk upgrade.
+Isi kunci Google Maps sendiri melalui `.env` untuk geocoding alamat baru.
+Tidak ada kunci atau data dari deployment lain yang disalin otomatis.
+
+Kolom **Petugas** opsional pada CSV/XLSX/XLS. Preprocessing mempertahankan
+Petugas bersama resinya. Setelah geocoding, sistem menghitung dan menyimpan
+baseline dalam `evaluasi_aktual`, lalu menampilkannya di halaman Upload **sebelum**
+tombol Mulai Clustering. Baseline juga tampil pada Dashboard, tab zona Aktual PT
+Pos, dan halaman Evaluasi. Ekspor menambahkan kolom **Petugas Aktual**.
+
+K tetap manual dan boleh berbeda dari jumlah kurir aktual. K-Means++ dan HBCDP
+memakai seluruh titik berhasil geocoding. Perbandingan Silhouette/DBI/Z₁ memakai
+resi ber-Petugas yang sama, menggunakan label hasil algoritma tanpa clustering
+ulang. Jika tidak ada Petugas, aktual menjadi N/A dan algoritma tetap berjalan
+pada seluruh titik. Z₂ dan riwayat tahap HBCDP tetap diagnostik seluruh titik.
+
+`services/actual_evaluation_service.py` menghitung metrik dalam koordinat meter.
+Z₁ adalah variansi populasi jumlah titik per kelompok. Nama Petugas dirapikan
+spasinya tetapi tetap peka huruf besar/kecil. Metrik tidak terdefinisi disimpan
+sebagai NULL dengan alasan, bukan nol; satu kurir masih dapat memiliki Z₁ = 0.
+Sidik data mendeteksi perubahan titik/Petugas: selesaikan geocoding lagi untuk
+memperbarui baseline. Perubahan K saja tidak menghitung ulang aktual.
+Timer hanya mencakup K-Means++ sampai HBCDP selesai.
+
+
 <p align="center">
   <img src="https://img.shields.io/badge/Field-Machine_Learning-blue?style=for-the-badge" alt="Machine Learning">
   <img src="https://img.shields.io/badge/Method-Balanced_K--Means-orange?style=for-the-badge" alt="Balanced K-Means">

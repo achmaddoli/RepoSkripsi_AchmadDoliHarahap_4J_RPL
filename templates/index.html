@@ -128,7 +128,7 @@
           </div>
 
           <!-- Top KPI Cards -->
-          <div class="kpi-grid">
+          <div class="kpi-grid actual-kpi-grid">
             <div class="kpi-card">
               <div class="kpi-icon-wrap">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -139,8 +139,14 @@
                 </svg>
               </div>
               <div class="kpi-content">
-                <span class="kpi-label">Jumlah Titik</span>
+                <span class="kpi-label">Jumlah Titik Pengiriman (N)</span>
                 <span class="kpi-value" id="kpi-jumlah-titik">-</span>
+              </div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-content">
+                <span class="kpi-label">Jumlah Kurir Aktual</span>
+                <span class="kpi-value" id="kpi-kurir-aktual">N/A</span>
               </div>
             </div>
 
@@ -162,10 +168,18 @@
           </div>
 
           <!-- Dual Maps Grid -->
-          <div class="dual-col-grid">
+          <div class="comparison-maps-grid">
+            <div class="dashboard-card">
+              <h2 class="card-title">Aktual PT Pos</h2>
+              <p class="card-subtitle" id="actual-map-message">Belum ada titik dengan Petugas valid.</p>
+              <div class="map-frame-box"><div id="map-actual-dash" class="map-element"></div></div>
+            </div>
             <!-- Left Map: K-Means Awal -->
             <div class="dashboard-card">
               <h2 class="card-title">Hasil K-Means Awal</h2>
+              <p class="card-subtitle">
+  Menampilkan hasil pengelompokan awal titik pengiriman menggunakan algoritma K-Means++, sebelum dilakukan proses penyeimbangan cluster.
+</p>
               <div class="map-frame-box">
                 <div id="map-kmeans-dash" class="map-element"></div>
                 
@@ -202,6 +216,9 @@
             <!-- Right Map: HBCDP Hasil Akhir -->
             <div class="dashboard-card">
               <h2 class="card-title">Hasil HBCDP (Hasil Akhir)</h2>
+              <p class="card-subtitle">
+  Menampilkan hasil pembagian zona pengiriman setelah proses penyeimbangan cluster menggunakan HBCDP, termasuk perubahan keanggotaan cluster jika terjadi.
+</p>
               <div class="map-frame-box">
                 <div id="map-hbcdp-dash" class="map-element"></div>
                
@@ -241,11 +258,15 @@
             <!-- Left Table: Ringkasan Hasil Evaluasi -->
             <div class="dashboard-card">
               <h2 class="card-title" style="margin-bottom: 12px;">Ringkasan Hasil Evaluasi</h2>
+              <p class="card-subtitle comparison-note" id="dashboard-comparison-scope"></p>
+              <p class="card-subtitle" id="dashboard-actual-reason"></p>
+              <p class="card-subtitle" id="dashboard-algorithm-reason"></p>
               <div class="table-responsive">
                 <table class="table-custom">
                   <thead>
                     <tr>
                       <th>Parameter</th>
+                      <th style="text-align: center;">Aktual PT Pos</th>
                       <th style="text-align: center;">K-Means Awal</th>
                       <th style="text-align: center;">HBCDP (Hasil Akhir)</th>
                     </tr>
@@ -253,43 +274,66 @@
                   <tbody>
                     <tr>
                       <td>Silhouette Score</td>
+                      <td style="text-align: center;" id="eval-actual-silhouette">N/A</td>
                       <td style="text-align: center;" id="eval-km-silhouette">-</td>
                       <td style="text-align: center;" id="eval-hb-silhouette">-</td>
                     </tr>
                     <tr>
                       <td>Davies-Bouldin Index (DBI)</td>
+                      <td style="text-align: center;" id="eval-actual-dbi">N/A</td>
                       <td style="text-align: center;" id="eval-km-dbi">-</td>
                       <td style="text-align: center;" id="eval-hb-dbi">-</td>
                     </tr>
                     <tr>
                       <td>Z₁</td>
+                      <td style="text-align: center;" id="eval-actual-z1">N/A</td>
                       <td style="text-align: center;" id="eval-km-z1">-</td>
                       <td style="text-align: center;" id="eval-hb-z1">-</td>
                     </tr>
                     <tr>
                       <td>Z₂</td>
+                      <td style="text-align: center;" id="eval-actual-z2">N/A</td>
                       <td style="text-align: center;" id="eval-km-z2">-</td>
                       <td style="text-align: center;" id="eval-hb-z2">-</td>
                     </tr>
                   </tbody>
                 </table>
+
+<div class="z2-dashboard-note">
+    <svg viewBox="0 0 24 24" width="16" height="16"
+         fill="none" stroke="#2563eb" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="16" x2="12" y2="12"></line>
+        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+    </svg>
+    <span>
+        <strong>Keterangan:</strong> Z₂ pada Aktual PT Pos ditampilkan sebagai N/A karena metrik ini digunakan untuk menghitung jarak perpindahan titik antar-cluster pada metode HBCDP, bukan pada pembagian pengiriman aktual PT Pos.
+    </span>
+</div>
+
               </div>
             </div>
 
             <!-- Right Table: Jumlah Anggota Cluster -->
             <div class="dashboard-card">
               <h2 class="card-title" style="margin-bottom: 12px;">Jumlah Anggota Cluster</h2>
+              <div class="btn-pill-group distribution-tabs" aria-label="Distribusi penugasan">
+                <button class="btn-tab active" id="tab-distribution-actual" data-distribution-mode="aktual">Aktual PT Pos</button>
+                <button class="btn-tab" id="tab-distribution-kmeans" data-distribution-mode="kmeans">K-Means</button>
+                <button class="btn-tab" id="tab-distribution-hbcdp" data-distribution-mode="hbcdp">HBCDP</button>
+              </div>
               <div class="table-responsive">
                 <table class="table-custom">
                   <thead>
                     <tr>
-                      <th>Cluster</th>
-                      <th style="text-align: center;">K-Means Awal</th>
-                      <th style="text-align: center;">HBCDP (Hasil Akhir)</th>
+                      <th id="distribution-group-label">Petugas</th>
+                      <th style="text-align: center;">Jumlah Titik</th>
                     </tr>
                   </thead>
                   <tbody id="table-cluster-distribution-body">
-                    <tr><td colspan="3" style="text-align: center; color: #64748b; padding: 24px;">Belum ada data cluster. Silakan unggah dataset.</td></tr>
+                    <tr><td colspan="2" class="empty-state">Belum ada kelompok yang tersedia.</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -314,6 +358,12 @@
             <div class="template-card-grid">
               <div>
                 <p class="card-subtitle">Unduh template berikut untuk mengetahui format dan struktur data yang sesuai dengan sistem.</p>
+                <p class="card-subtitle">
+                Kolom <strong>Petugas</strong> bersifat opsional.
+                Isi dengan nama kurir PT Pos untuk membandingkan pembagian wilayah pengiriman aktual dengan hasil clustering.
+                Data tanpa nama Petugas tetap diproses.
+                Jumlah cluster (K) ditentukan secara manual dan tidak harus sama dengan jumlah kurir aktual.
+              </p>
                 <div class="template-actions">
                   <button class="btn btn-secondary" id="btn-download-excel">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -345,43 +395,49 @@
                         <th>Tgl Antaran Pertama</th>
                         <th>Alamat</th>
                         <th>Kota</th>
+                        <th>Petugas (opsional)</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
                         <td style="text-align: center;">1</td>
                         <td>nosi_1</td>
-                        <td>2025-08-01</td>
+                        <td>01/08/2025</td>
                         <td>Jl. Contoh No. 1</td>
                         <td>Malang</td>
+                        <td>Kurir A</td>
                       </tr>
                       <tr>
                         <td style="text-align: center;">2</td>
                         <td>nosi_2</td>
-                        <td>2025-08-01</td>
+                        <td>01/08/2025</td>
                         <td>Jl. Contoh No. 2</td>
                         <td>Malang</td>
+                        <td>Kurir B</td>
                       </tr>
                       <tr>
                         <td style="text-align: center;">3</td>
                         <td>nosi_3</td>
-                        <td>2025-08-01</td>
+                        <td>01/08/2025</td>
                         <td>Jl. Contoh No. 3</td>
                         <td>Malang</td>
+                        <td>Kurir A</td>
                       </tr>
                       <tr>
                         <td style="text-align: center;">4</td>
                         <td>nosi_4</td>
-                        <td>2025-08-01</td>
+                        <td>01/08/2025</td>
                         <td>Jl. Contoh No. 4</td>
                         <td>Malang</td>
+                        <td>Kurir B</td>
                       </tr>
                       <tr>
                         <td style="text-align: center;">5</td>
                         <td>nosi_5</td>
-                        <td>2025-08-01</td>
+                        <td>01/08/2025</td>
                         <td>Jl. Contoh No. 5</td>
                         <td>Malang</td>
+                        <td></td>
                       </tr>
                     </tbody>
                   </table>
@@ -393,12 +449,12 @@
           <!-- Card 2: Unggah Dataset Pengiriman -->
           <div class="dashboard-card">
             <h2 class="card-title">Unggah Dataset Pengiriman</h2>
-            <p class="card-subtitle">Pilih file dataset pengiriman dalam format .xlsx, .xls, atau .csv (satu file untuk satu tanggal/batch pengiriman).</p>
+            <p class="card-subtitle">Pilih file dataset pengiriman dalam format .csv atau .xlsx (satu file untuk satu tanggal/batch pengiriman).</p>
 
             <div class="upload-dropzone-grid">
               <!-- Dropzone Left -->
               <div class="dropzone-box" id="upload-dropzone">
-                <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display: none;">
+                <input type="file" id="file-input" accept=".csv,.xlsx" style="display: none;">
                 <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                   <polyline points="14 2 14 8 20 8"></polyline>
@@ -406,9 +462,9 @@
                   <line x1="16" y1="17" x2="8" y2="17"></line>
                   <polyline points="10 9 9 9 8 9"></polyline>
                 </svg>
-                <div class="dropzone-text">Drag and drop file di sini atau</div>
+                <div class="dropzone-text">Drag and drop file disini</div>
                 <button type="button" class="btn btn-primary" id="btn-select-file">Pilih File</button>
-                <div class="dropzone-sub">Format: .xlsx, .xls, .csv</div>
+                <div class="dropzone-sub">Format: .csv, .xlsx</div>
               </div>
 
               <!-- Selected File Right -->
@@ -437,60 +493,141 @@
           </div>
 
 
-<!-- Card 3: Proses Preprocessing -->
-<div class="dashboard-card" id="preprocessing-card">
+          <!-- Card 3: Proses Preprocessing -->
+          <div class="dashboard-card" id="preprocessing-card">
+            <div class="dashboard-card-header">
+              <div>
+                <h2 class="card-title">Proses Preprocessing</h2>
+                <p class="card-subtitle" style="margin-top: 4px;">Pemeriksaan dan pembersihan data pengiriman</p>
+              </div>
+              <span id="preprocessing-status" style="color: #64748b; font-weight: 600;">Belum diproses</span>
+            </div>
 
-  <div class="dashboard-card-header">
-    <h2 class="card-title">Proses Preprocessing</h2>
+            <div class="progress-container">
+              <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="preprocessing-progress-fill" style="width: 0%; background: #263e6b;"></div>
+              </div>
+            </div>
 
-    <span id="preprocessing-status" style="color: #64748b; font-weight: 600;">Belum diproses</span>
-  </div>
+            <div class="metrics-row-grid" style="margin-top: 24px;">
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="preprocessing-total-awal">0</div>
+                <div class="metric-kpi-title">Data awal</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="preprocessing-total-eliminasi" style="color: #dc2626;">0</div>
+                <div class="metric-kpi-title">Data tereliminasi</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="preprocessing-jumlah-valid" style="color: #16a34a;">0</div>
+                <div class="metric-kpi-title">Data valid</div>
+              </div>
+            </div>
 
-  <div class="progress-container">
-    <div class="progress-bar-track">
-      <div
-        class="progress-bar-fill"
-        id="preprocessing-progress-fill"
-        style="width: 0%; background: #263e6b;">
-      </div>
-    </div>
-  </div>
+            <p class="card-subtitle" id="preprocessing-summary" style="margin-top: 20px;">
+              Belum ada hasil preprocessing.
+            </p>
 
-  <div class="metrics-row-grid"
-     style="margin-top: 24px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap;">
+            <!-- Rincian Hasil Preprocessing (Image 3) -->
+            <div id="preprocessing-details-container" style="display: none; margin-top: 24px;">
+              <h3 style="font-size: 16px; font-weight: 700; color: #1e293b; margin-bottom: 4px;">Rincian Hasil Preprocessing</h3>
+              <p class="card-subtitle" style="margin-bottom: 16px;">Klik kategori Data Kosong atau Nosi Duplikat untuk melihat rincian data yang dieliminasi. Normalisasi Alamat dilakukan pada data valid tanpa mengeliminasi data.</p>
 
-    <div class="metric-kpi-box" style="flex: 1 1 250px; max-width: 350px;">
-      <div class="metric-kpi-value" id="preprocessing-total-awal">0</div>
-      <div class="metric-kpi-title">Data awal</div>
-    </div>
+              <div class="prep-list-container" style="display: flex; flex-direction: column; gap: 12px;">
+                <!-- 1. Data Kosong -->
+                <div class="prep-item-card" id="card-data-kosong">
+                  <div class="prep-item-header" id="header-data-kosong">
+                    <div class="prep-header-left">
+                      <svg class="prep-chevron" id="chevron-data-kosong" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                      <div>
+                        <div class="prep-item-title">Data Kosong</div>
+                        <div class="prep-item-desc">Nomor resi atau alamat tidak terisi</div>
+                      </div>
+                    </div>
+                    <span class="badge-count" id="count-data-kosong">0 data</span>
+                  </div>
+                  <div class="prep-drawer" id="drawer-data-kosong" style="display: none;">
+                    <div class="table-responsive" style="max-height: 220px; overflow-y: auto; padding: 0 16px 14px 16px;">
+                      <table class="table-custom table-compact">
+                        <thead>
+                          <tr>
+                            <th style="width: 45px; text-align: center;">No.</th>
+                            <th style="width: 75px; text-align: center;">Baris</th>
+                            <th>Nosi</th>
+                            <th>Alamat</th>
+                            <th>Keterangan</th>
+                          </tr>
+                        </thead>
+                        <tbody id="table-data-kosong-body"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
 
-    <div class="metric-kpi-box" style="flex: 1 1 250px; max-width: 350px;">
-      <div class="metric-kpi-value" id="preprocessing-total-eliminasi">0</div>
-      <div class="metric-kpi-title">Data tereliminasi</div>
-    </div>
+                <!-- 2. Resi Duplikat -->
+                <div class="prep-item-card" id="card-resi-duplikat">
+                  <div class="prep-item-header" id="header-resi-duplikat">
+                    <div class="prep-header-left">
+                      <svg class="prep-chevron" id="chevron-resi-duplikat" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                      <div>
+                        <div class="prep-item-title">Nosi Duplikat</div>
+                        <div class="prep-item-desc">Nosi sudah ditemukan pada baris sebelumnya</div>
+                      </div>
+                    </div>
+                    <span class="badge-count" id="count-resi-duplikat">0 data</span>
+                  </div>
+                  <div class="prep-drawer" id="drawer-resi-duplikat" style="display: none;">
+                    <div class="table-responsive" style="max-height: 220px; overflow-y: auto; padding: 0 16px 14px 16px;">
+                      <table class="table-custom table-compact">
+                        <thead>
+                          <tr>
+                            <th style="width: 45px; text-align: center;">No.</th>
+                            <th style="width: 75px; text-align: center;">Baris</th>
+                            <th>Nosi</th>
+                            <th>Alamat</th>
+                            <th>Keterangan</th>
+                          </tr>
+                        </thead>
+                        <tbody id="table-resi-duplikat-body"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
 
-    <div class="metric-kpi-box" style="flex: 1 1 250px; max-width: 350px;">
-      <div class="metric-kpi-value" id="preprocessing-jumlah-valid">0</div>
-      <div class="metric-kpi-title">Data valid</div>
-    </div>
+                <!-- 3. Normalisasi Alamat -->
+                <div class="prep-item-card prep-item-success" style="border-left: 4px solid #16a34a; background: #f0fdf4;">
+                  <div class="prep-item-header" style="cursor: default;">
+                    <div class="prep-header-left">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                      <div>
+                        <div class="prep-item-title" style="color: #166534;">Normalisasi Alamat</div>
+                        <div class="prep-item-desc" id="preprocessing-normalisasi-text" style="color: #15803d;">Alamat pada 0 data valid distandarisasi untuk penulisan Jalan, Gang, dan Nomor serta dirapikan spasinya sebelum geocoding.</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-  </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e2e8f0; flex-wrap: wrap; gap: 12px;">
+                <span id="preprocessing-footer-text" style="font-size: 14px; font-weight: 600; color: #475569;">0 dari 0 data siap dilanjutkan.</span>
+                <button type="button" class="btn btn-primary" id="btn-lanjut-geocoding" style="display: inline-flex; align-items: center; gap: 8px;">
+                  Lihat Proses Geocoding
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+                </button>
+              </div>
+            </div>
+          </div>
 
-  <p class="card-subtitle" id="preprocessing-summary" style="margin-top: 20px;">
-    Belum ada hasil preprocessing.
-  </p>
+          <!-- Card 4 : Proses Geocoding (Image 4) -->
+          <div class="dashboard-card" id="card-geocoding">
+            <div class="dashboard-card-header">
+              <div>
+                <h2 class="card-title">Proses Geocoding</h2>
+                <p class="card-subtitle" style="margin-top: 4px;">Konversi alamat pengiriman menjadi koordinat geografis</p>
+              </div>
+              <span id="geocoding-status" style="color: #64748b; font-weight: 600;">Belum diproses</span>
+            </div>
 
-</div>
-
-          <!-- Card 4 : Proses Geocoding -->
-<div class="dashboard-card">
-    <div class="dashboard-card-header">
-        <h2 class="card-title">Proses Geocoding</h2>
-        <span id="geocoding-status"
-              style="color: #64748b; font-weight: 600;">
-            Belum diproses
-        </span>
-    </div>
             <div class="progress-container">
               <div class="progress-bar-track">
                 <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
@@ -500,12 +637,118 @@
                 <span class="progress-percent-text" id="progress-percent-text">0%</span>
               </div>
             </div>
+
+            <div class="metrics-row-grid" style="margin-top: 24px;">
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="geocoding-kpi-diproses">0</div>
+                <div class="metric-kpi-title">Data Diproses</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="geocoding-kpi-berhasil" style="color: #16a34a;">0</div>
+                <div class="metric-kpi-title">Berhasil</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="geocoding-kpi-gagal" style="color: #dc2626;">0</div>
+                <div class="metric-kpi-title">Gagal</div>
+              </div>
+            </div>
+
+            <!-- Accordion Rincian Geocoding Gagal (Image 4) -->
+            <div id="geocoding-gagal-container" style="display: none; margin-top: 20px;">
+              <div class="prep-item-card" style="border-left: 4px solid #dc2626;">
+                <div class="prep-item-header" id="header-geocoding-gagal">
+                  <div class="prep-header-left">
+                    <svg class="prep-chevron" id="chevron-geocoding-gagal" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <div>
+                      <div class="prep-item-title" style="color: #991b1b;">Rincian Geocoding Gagal</div>
+                      <div class="prep-item-desc">Lihat alamat yang belum berhasil memperoleh koordinat</div>
+                    </div>
+                  </div>
+                  <span class="badge-count" id="geocoding-gagal-badge" style="color: #dc2626; background: #fee2e2;">0 data</span>
+                </div>
+                <div class="prep-drawer" id="drawer-geocoding-gagal">
+                  <div class="table-responsive" style="max-height: 220px; overflow-y: auto; padding: 0 16px 14px 16px;">
+                    <table class="table-custom table-compact">
+                      <thead>
+                        <tr>
+                          <th style="width: 50px; text-align: center;">No.</th>
+                          <th>Nosi</th>
+                          <th>Alamat</th>
+                          <th>Keterangan</th>
+                        </tr>
+                      </thead>
+                      <tbody id="table-geocoding-gagal-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dashboard-card actual-baseline-panel" id="actual-baseline-panel" hidden aria-live="polite">
+            <h2 class="card-title">Baseline Aktual PT Pos</h2>
+
+<p class="card-subtitle" style="margin-top: 4px;">
+  Evaluasi pembagian pengiriman berdasarkan petugas asli PT Pos.
+</p>
+
+            <p class="card-subtitle" id="actual-baseline-counts"></p>
+            
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+  <p class="card-subtitle" id="actual-baseline-status" style="margin: 0;"></p>
+
+  <span
+    role="img"
+    aria-label="Informasi status evaluasi"
+    title="Status sebagian berarti hanya sebagian metrik dapat dihitung, bukan proses yang belum selesai."
+    style="display: inline-flex; align-items: center; color: #2563eb; cursor: help;"
+  >
+    <svg viewBox="0 0 24 24" width="16" height="16"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+      <circle cx="12" cy="12" r="10"></circle>
+      <line x1="12" y1="16" x2="12" y2="12"></line>
+      <line x1="12" y1="8" x2="12.01" y2="8"></line>
+    </svg>
+  </span>
+</div>
+
+            <div class="metrics-row-grid actual-baseline-metrics">
+              <div class="metric-kpi-box"><div class="metric-kpi-title">Silhouette Score</div><div class="metric-kpi-value" id="upload-actual-silhouette">N/A</div></div>
+              <div class="metric-kpi-box"><div class="metric-kpi-title">DBI</div><div class="metric-kpi-value" id="upload-actual-dbi">N/A</div></div>
+              <div class="metric-kpi-box"><div class="metric-kpi-title">Z₁</div><div class="metric-kpi-value" id="upload-actual-z1">N/A</div></div>
+              <div class="metric-kpi-box">
+    <div class="metric-kpi-title">
+        Z₂
+        <span class="z2-info-tooltip" tabindex="0" role="button"
+              aria-label="Informasi Z2 Aktual PT Pos">
+            <span class="z2-info-icon">i</span>
+<span class="z2-tooltip-text">
+    Z₂ pada Aktual PT Pos ditampilkan sebagai N/A karena
+    metrik ini digunakan untuk menghitung jarak perpindahan
+    titik antar-cluster pada metode HBCDP, bukan pada
+    pembagian pengiriman aktual PT Pos.
+</span>
+        </span>
+    </div>
+    <div class="metric-kpi-value" id="upload-actual-z2">N/A</div>
+</div>
+            </div>
+            <p class="card-subtitle comparison-note" id="actual-baseline-reason"></p>
           </div>
 
           <!-- Card 5 : Parameter Pemodelan -->
           <div class="dashboard-card">
             <h2 class="card-title">Parameter Pemodelan</h2>
-            <p class="card-subtitle">Setelah proses geocoding selesai, tentukan jumlah cluster untuk proses clustering.</p>
+            <p class="card-subtitle">
+  Setelah proses geocoding selesai, tentukan <strong>Jumlah Kurir (K)</strong>
+  secara manual. Nilai K digunakan untuk menentukan jumlah cluster dan
+  boleh berbeda dari jumlah kurir PT Pos yang sebenarnya.
+  Pembagian wilayah berdasarkan petugas aktual dihitung dan disimpan
+  setelah geocoding sebagai bahan perbandingan. Jika hasil evaluasi
+  pembagian aktual tidak tersedia, proses clustering tetap dapat dilanjutkan.
+</p>
             <div class="parameter-row">
               <div class="parameter-input-group">
                 <label for="input-cluster-k">Jumlah Kurir (K)</label>
@@ -535,6 +778,7 @@
 
           <!-- Tab Switcher -->
           <div class="btn-pill-group">
+            <button class="btn-tab" id="tab-aktual">Aktual PT Pos</button>
             <button class="btn-tab active" id="tab-kmeans">K-Means Awal</button>
             <button class="btn-tab" id="tab-hbcdp">HBCDP (Hasil Akhir)</button>
           </div>
@@ -543,7 +787,27 @@
           <div class="zona-layout-grid">
             <!-- Left: Big Map -->
             <div class="dashboard-card">
-              <h2 class="card-title" id="zona-map-title">Visualisasi Zona - K-Means Awal</h2>
+<div class="zona-map-heading">
+    <h2 class="card-title" id="zona-map-title">
+        Visualisasi Zona - K-Means Awal
+    </h2>
+
+    <button type="button" class="btn btn-download-map" id="btn-download-map">
+        <svg viewBox="0 0 24 24"
+             fill="none"
+             stroke="currentColor"
+             stroke-width="2"
+             stroke-linecap="round"
+             stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Unduh Peta
+    </button>
+</div>
+
+<p class="card-subtitle" id="zona-actual-message"></p>
               <div class="map-frame-box zona-map-frame">
                 <div id="map-zona-large" class="map-element"></div>
                 
@@ -612,7 +876,7 @@
                       <circle cx="11" cy="11" r="8"></circle>
                       <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                     </svg>
-                    <input type="text" id="search-resi-alamat" class="input-text" placeholder="Cari alamat / no resi...">
+                    <input type="text" id="search-resi-alamat" class="input-text" placeholder="Cari resi / alamat / petugas..." aria-label="Cari resi, alamat atau petugas">
                   </div>
                 </div>
 
@@ -623,7 +887,7 @@
                         <th style="width: 40px; text-align: center;">No.</th>
                         <th>No Resi</th>
                         <th>Alamat</th>
-                        <th style="text-align: center;">Cluster</th>
+                        <th style="text-align: center;" id="anggota-group-heading">Cluster</th>
                       </tr>
                     </thead>
                     <tbody id="table-anggota-body">
@@ -664,6 +928,117 @@
               <h1 class="page-title">Evaluasi Clustering</h1>
             </div>
           </div>
+          <!-- Ringkasan Proses Clustering (Image 10) -->
+          <div class="dashboard-card">
+            <h2 class="card-title">Ringkasan Proses Clustering</h2>
+            <div class="metrics-row-grid" style="margin-top: 16px;">
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="card-eval-n">-</div>
+                <div class="metric-kpi-title">Jumlah Titik Pengiriman (N)</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="card-eval-actual-couriers">N/A</div>
+                <div class="metric-kpi-title">Jumlah Kurir Aktual</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="card-eval-k">-</div>
+                <div class="metric-kpi-title">Jumlah Kurir (K)</div>
+              </div>
+              <div class="metric-kpi-box">
+                <div class="metric-kpi-value" id="card-eval-waktu-komputasi">-</div>
+                <div class="metric-kpi-title">Waktu Komputasi Total</div>
+              </div>
+            </div>
+            <p class="card-subtitle" style="margin-top: 14px; font-size: 13px; color: #64748b;">
+              Waktu komputasi total dihitung dari awal proses K-Means++ hingga HBCDP selesai, tanpa memisahkan waktu per metode.
+            </p>
+          </div>
+          <p class="comparison-note" id="evaluation-comparison-scope"></p>
+          <p class="comparison-note" id="evaluation-algorithm-reason"></p>
+
+          <!-- Panduan Membaca Metrik Evaluasi (Image 9 & 10) -->
+          <div class="dashboard-card" id="card-panduan-eval">
+            <div class="dashboard-card-header" style="align-items: flex-start;">
+              <div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24"
+                      width="18"
+                      height="18"
+                      fill="none"
+                      stroke="#2563eb"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      style="flex-shrink: 0;"
+                      aria-hidden="true">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="16" x2="12" y2="12"></line>
+                      <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                  <h2 class="card-title" style="margin: 0; font-size: 17px;">Panduan Memahami Hasil Evaluasi</h2>
+                </div>
+                <p class="card-subtitle" style="margin-top: 6px; font-size: 13px;">
+                  Panduan ini menjelaskan arti setiap metrik yang digunakan untuk menilai hasil pengelompokan titik pengiriman.
+                </p>
+              </div>
+              <button type="button" class="btn-toggle-link" id="btn-toggle-panduan-eval" style="background: none; border: none; color: #475569; font-weight: 600; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">
+                <span id="text-panduan-eval">Sembunyikan</span> <span id="arrow-panduan-eval">^</span>
+              </button>
+            </div>
+            <div class="eval-guide-grid" id="panduan-eval-body" style="margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px;">
+              <div class="eval-guide-box" style="border: 1px solid #bfdbfe; border-top: 3px solid #2563eb; border-radius: 8px; padding: 16px; background: #ffffff; display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                  <div style="font-weight: 700; color: #1e293b; margin-bottom: 8px;">Silhouette Score</div>
+                  <p style="font-size: 12.5px; color: #475569; line-height: 1.5; margin: 0 0 12px 0;">Menilai seberapa baik titik pengiriman dikelompokkan berdasarkan kedekatan lokasinya. Nilainya berkisar dari -1 hingga 1. Semakin mendekati 1, semakin baik hasil pengelompokannya.</p>
+                </div>
+                <span class="guide-badge-pill guide-blue" style="align-self: flex-start; padding: 4px 10px; border-radius: 12px; font-size: 11.5px; font-weight: 600; background: #eff6ff; color: #1d4ed8;">Semakin tinggi semakin baik</span>
+              </div>
+              <div class="eval-guide-box" style="border: 1px solid #fecaca; border-top: 3px solid #dc2626; border-radius: 8px; padding: 16px; background: #ffffff; display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                  <div style="font-weight: 700; color: #1e293b; margin-bottom: 8px;">Davies-Bouldin Index (DBI)</div>
+                  <p style="font-size: 12.5px; color: #475569; line-height: 1.5; margin: 0 0 12px 0;">Menilai seberapa rapat titik dalam setiap cluster dan seberapa jelas pemisahannya dengan cluster lain. Semakin rendah nilainya, semakin baik hasil pengelompokannya.</p>
+                </div>
+                <span class="guide-badge-pill guide-red" style="align-self: flex-start; padding: 4px 10px; border-radius: 12px; font-size: 11.5px; font-weight: 600; background: #fef2f2; color: #b91c1c;">Semakin rendah semakin baik</span>
+              </div>
+              <div class="eval-guide-box" style="border: 1px solid #bfdbfe; border-top: 3px solid #0284c7; border-radius: 8px; padding: 16px; background: #ffffff; display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                  <div style="font-weight: 700; color: #1e293b; margin-bottom: 8px;">Z₁ &mdash; Keseimbangan Jumlah Titik</div>
+                  <p style="font-size: 12.5px; color: #475569; line-height: 1.5; margin: 0 0 12px 0;">Menilai seberapa merata jumlah titik pengiriman di setiap cluster. Nilai yang lebih kecil menunjukkan pembagian jumlah titik yang lebih seimbang.</p>
+                </div>
+                <span class="guide-badge-pill guide-blue" style="align-self: flex-start; padding: 4px 10px; border-radius: 12px; font-size: 11.5px; font-weight: 600; background: #f0f9ff; color: #0369a1;">Semakin rendah semakin seimbang</span>
+              </div>
+              <div class="eval-guide-box" style="border: 1px solid #bbf7d0; border-top: 3px solid #16a34a; border-radius: 8px; padding: 16px; background: #ffffff; display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                  <div style="font-weight: 700; color: #1e293b; margin-bottom: 8px;">Z₂ &mdash; Biaya Penugasan</div>
+                  <p style="font-size: 12.5px; color: #475569; line-height: 1.5; margin: 0 0 12px 0;">Mengukur total jarak penugasan titik pengiriman berdasarkan model HBCDP, dalam satuan meter. Nilai yang lebih kecil menunjukkan biaya penugasan yang lebih rendah. Bukan jarak tempuh kurir.</p>
+                </div>
+                <span class="guide-badge-pill guide-green" style="align-self: flex-start; padding: 4px 10px; border-radius: 12px; font-size: 11.5px; font-weight: 600; background: #f0fdf4; color: #15803d;">Semakin rendah semakin efisien</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dashboard-card" id="card-eval-actual">
+            <h2 class="card-title">Evaluasi Aktual PT Pos</h2>
+            <p class="card-subtitle" id="evaluation-actual-reason"></p>
+            <div class="metrics-row-grid">
+              <div class="metric-kpi-box"><div class="metric-kpi-title">Silhouette Score</div><div class="metric-kpi-value" id="card-eval-actual-silhouette">N/A</div></div>
+              <div class="metric-kpi-box"><div class="metric-kpi-title">Davies-Bouldin Index (DBI)</div><div class="metric-kpi-value" id="card-eval-actual-dbi">N/A</div></div>
+              <div class="metric-kpi-box"><div class="metric-kpi-title">Z₁</div><div class="metric-kpi-value" id="card-eval-actual-z1">N/A</div></div>
+              <div class="metric-kpi-box">
+    <div class="metric-kpi-title">
+        Z₂
+        <span class="z2-info-tooltip" tabindex="0" role="button"
+              aria-label="Informasi Z2 Aktual PT Pos">
+            <span class="z2-info-icon">i</span>
+            <span class="z2-tooltip-text">
+                Z₂ pada Aktual PT Pos ditampilkan sebagai N/A karena metrik ini digunakan untuk menghitung jarak perpindahan titik antar-cluster pada metode HBCDP, bukan pada pembagian pengiriman aktual PT Pos.
+            </span>
+        </span>
+    </div>
+    <div class="metric-kpi-value" id="card-eval-actual-z2">N/A</div>
+</div>
+            </div>
+          </div>
 
           <!-- Card 1: Evaluasi K-Means Awal -->
           <div class="dashboard-card">
@@ -694,6 +1069,7 @@
           <!-- Card 2: Evaluasi Setiap Tahap HBCDP -->
           <div class="dashboard-card">
             <h2 class="card-title">Evaluasi Setiap Tahap HBCDP</h2>
+            <p class="card-subtitle comparison-note">Menampilkan hasil evaluasi keseimbangan jumlah titik dan total jarak penugasan ulang titik antar-cluster pada setiap tahap HBCDP.</p>
             <div class="table-responsive">
               <table class="table-custom">
                 <thead>
@@ -702,11 +1078,11 @@
                     <th style="text-align: center;">Jumlah Anggota Cluster</th>
                     <th style="text-align: center;">Z₁</th>
                     <th style="text-align: center;">Z₂</th>
-                    <th style="text-align: center;">Jumlah Titik yang Direassignment</th>
+                    <th style="text-align: center;">Jumlah Titik Berubah Cluster</th>
                   </tr>
                 </thead>
                 <tbody id="table-eval-steps-body">
-                  <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Belum ada riwayat iterasi penyeimbangan beban kurir</td></tr>
+                  <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Belum ada proses penyeimbangan jumlah titik pengiriman antar-kurir.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -800,11 +1176,14 @@
   <!-- SheetJS Library for Native Excel (.xlsx) Generation -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-  <!-- Application Scripts -->
-  <script src="js/data.js"></script>
-  <script src="js/clustering.js"></script>
-  <script src="js/map.js"></script>
-  <script src="js/app.js"></script>
+<!-- Library untuk ekspor gambar PNG -->
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+<!-- Application Scripts -->
+<script src="js/data.js"></script>
+<script src="js/clustering.js"></script>
+<script src="js/map.js"></script>
+<script src="js/app.js"></script>
 
 </body>
 </html>

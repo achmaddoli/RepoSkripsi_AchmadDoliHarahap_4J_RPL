@@ -45,13 +45,18 @@ Salin template konfigurasi yang sudah disediakan:
 ```bash
 cp .env.example .env
 ```
-*(Opsional)* Buka file `.env` menggunakan teks editor (VS Code, Notepad, atau nano). Masukkan `GOOGLE_MAPS_API_KEY` jika Anda memiliki API key resmi Google Maps.
+Isi `GOOGLE_MAPS_API_KEY` pada `.env` untuk geocoding alamat baru. Tanpa kunci, layanan mengembalikan geocoding gagal; aplikasi tidak membuat koordinat simulasi.
 
 ### 3. Jalankan Docker Compose
 ```bash
 docker compose up -d --build
 ```
 > **Catatan:** Flag `--build` memastikan image Python Flask dirakit secara otomatis untuk pertama kali.
+> Compose menggunakan proyek `geokurir-actual` dan volume tersendiri. Container
+> web menjalankan `python migrate.py up` sebelum Flask. Untuk upgrade database
+> yang sudah ada, gunakan `docker compose exec -T web python migrate.py up`;
+> perintah ini tidak menghapus dataset. Jangan gunakan `fresh` sebagai upgrade.
+
 
 Pada perangkat atau server baru dengan volume baru, database dimulai kosong.
 Docker hanya membuat struktur tabel dari `database/01_schema.sql`; dump
@@ -61,8 +66,8 @@ sama mempertahankan data. Saat pindah perangkat dan ingin mulai kosong, cukup
 salin kode, buat `.env` baru, dan jangan pindahkan volume PostgreSQL/restore backup.
 
 ### 4. Akses Aplikasi
-* **Website GeoKurir Malang:** Buka browser di 👉 **[http://localhost:5000](http://localhost:5000)**
-* **Database GUI (Adminer):** Buka browser di 👉 **[http://localhost:8080](http://localhost:8080)**  
+* **Website GeoKurir Malang:** **[http://127.0.0.1:5001](http://127.0.0.1:5001)**
+* **Database GUI (Adminer):** **[http://127.0.0.1:8081](http://127.0.0.1:8081)**
   *(Sistem: `PostgreSQL`, Server: `postgres`, User: `geokurir`, Password: `geokurir_secret`, Database: `geokurir_db`)*
 
 ---
@@ -88,7 +93,6 @@ Buka port SSH, HTTP, HTTPS, dan port aplikasi jika diakses langsung:
 sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
-sudo ufw allow 5000/tcp
 sudo ufw enable
 ```
 
@@ -106,18 +110,20 @@ docker compose up -d --build
 ```
 
 ### 5. Akses Aplikasi VPS
-Buka di browser menggunakan IP Publik VPS Anda:
-* Website: `http://<IP_PUBLIK_VPS>:5000`
-* PostgreSQL dan Adminer hanya terbuka pada localhost server. Untuk membuka
-  Adminer dari laptop, gunakan SSH tunnel:
-  `ssh -L 18080:127.0.0.1:8080 user@<IP_PUBLIK_VPS>`, lalu buka
-  `http://localhost:18080` di laptop.
+Secara default layanan hanya menerima koneksi localhost. Gunakan reverse proxy
+di bagian berikut, atau SSH tunnel dari laptop:
+
+```sh
+ssh -L 15001:127.0.0.1:5001 -L 18081:127.0.0.1:8081 user@<IP_PUBLIK_VPS>
+```
+
+Buka `http://localhost:15001` untuk website dan `http://localhost:18081` untuk Adminer.
 
 ---
 
 ## 4. Langkah (Opsional VPS): Nginx Reverse Proxy & Domain SSL
 
-Jika Anda memiliki domain (contoh: `geokurir.domainanda.com`) dan ingin menggunakan HTTPS (port 80 & 443 standar tanpa `:5000`):
+Jika Anda ingin menggunakan HTTPS melalui domain tanpa port aplikasi:
 
 1. **Install Nginx & Certbot:**
    ```bash
@@ -134,7 +140,7 @@ Jika Anda memiliki domain (contoh: `geokurir.domainanda.com`) dan ingin mengguna
        server_name geokurir.domainanda.com;
 
        location / {
-           proxy_pass http://127.0.0.1:5000;
+           proxy_pass http://127.0.0.1:5001;
            proxy_set_header Host $host;
            proxy_set_header X-Real-IP $remote_addr;
            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -160,13 +166,14 @@ Jika Anda memiliki domain (contoh: `geokurir.domainanda.com`) dan ingin mengguna
 
 ## 5. Cheatsheet Perintah Docker Compose
 
-Gunakan perintah ini di dalam folder `websitegeokurir/`:
+Gunakan perintah ini di dalam folder `webgeokurir/`:
 
 | Tujuan | Perintah |
 | :--- | :--- |
 | **Menjalankan aplikasi di background** | `docker compose up -d` |
 | **Rebuild setelah ada perubahan kode** | `docker compose up -d --build` |
 | **Melihat status kontainer aktif** | `docker compose ps` |
+| **Migrasi tambahan tanpa menghapus data** | `docker compose exec -T web python migrate.py up` |
 | **Melihat log backend Flask secara realtime** | `docker compose logs -f web` |
 | **Melihat log PostgreSQL** | `docker compose logs -f postgres` |
 | **Merestart seluruh sistem** | `docker compose restart` |
@@ -180,12 +187,12 @@ Gunakan perintah ini di dalam folder `websitegeokurir/`:
 
 ### Cara Backup Database PostgreSQL:
 ```bash
-docker exec -t geokurir-postgres pg_dump -U geokurir geokurir_db > backup_geokurir_$(date +%Y%m%d).sql
+docker compose exec -T postgres pg_dump -U geokurir geokurir_db > backup_geokurir_$(date +%Y%m%d).sql
 ```
 
 ### Cara Restore Database dari File Backup:
 ```bash
-cat backup_geokurir_20261022.sql | docker exec -i geokurir-postgres psql -U geokurir -d geokurir_db
+docker compose exec -T postgres psql -U geokurir -d geokurir_db < backup_geokurir_20261022.sql
 ```
 
 ---
@@ -196,15 +203,26 @@ cat backup_geokurir_20261022.sql | docker exec -i geokurir-postgres psql -U geok
 * **Penyebab:** Mengetik `docker-compose -d up`.
 * **Solusi:** Ketik `docker compose up -d` (flag `-d` diletakkan setelah `up`).
 
-### Q: Port 5000 atau 5432 sudah terpakai oleh aplikasi lain
-* **Penyebab:** Di laptop/VPS sudah ada PostgreSQL lokal atau aplikasi lain di port 5000.
-* **Solusi:** Edit file `.env`, ubah port yang bentrok (misal `FLASK_PORT=5001` atau `DB_PORT=5433`), lalu jalankan `docker compose up -d`.
+### Q: Port 5001 atau 5433 sudah terpakai oleh aplikasi lain
+* **Penyebab:** Layanan lain memakai port host yang sama.
+* **Solusi:** Edit `.env`, misalnya `FLASK_PORT=5002` atau `DB_PORT=5434`, lalu jalankan `docker compose up -d`. Port PostgreSQL di jaringan container tetap 5432.
 
 ### Q: Perubahan file Python tidak langsung ter-update di web
 * **Solusi:** Karena mode produksi mematikan debug reload, jalankan perintah:
   ```bash
   docker compose restart web
   ```
+
+### Q: API key terisi di `.env`, tetapi aplikasi di container membacanya kosong
+* `load_dotenv()` tidak menimpa variabel environment yang sudah ada, termasuk nilai kosong. Perubahan `.env` memerlukan pembuatan ulang container web; `docker compose restart web` tidak memperbarui environment container.
+* Jalankan dari root repository ini. Untuk deployment terpisah pada port 5001, gunakan file Compose dan nama proyek secara eksplisit agar tidak menyasar deployment lama:
+  ```bash
+  env -u GOOGLE_MAPS_API_KEY FLASK_PORT=5001 DB_PORT=5433 ADMINER_PORT=8081 \
+    docker compose --env-file .env -f docker-compose.yml -p geokurir-actual \
+    up -d --no-deps --force-recreate web
+  ```
+* Pastikan konfigurasi database dan pengaturan lain di `.env` sesuai deployment aktif sebelum membuat ulang container. Perintah di atas hanya membuat ulang web, bukan PostgreSQL atau volumenya.
+* Verifikasi keberadaan dan kecocokan key tanpa mencetak nilainya. Lanjutkan dengan geocoding alamat baru dan pemeriksaan peta di browser; keberadaan key saja tidak membuktikan akses Google berhasil.
 
 ### Q: Ingin mereset total database agar kosong kembali
 * **Solusi:** Cadangkan dahulu. Perintah berikut menghapus seluruh data volume:

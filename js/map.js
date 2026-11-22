@@ -5,9 +5,19 @@
  */
 
 class GeoMapManager {
-  constructor() {
+ constructor() {
     this.maps = {};
     this.layers = {};
+    this.pointMarkers = {};
+}
+
+  escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
+  }
+
+  groupMetadata(id, mode, petugas = null) {
+    const metadata = getClusterMetadata(id);
+    return mode === 'aktual' ? { ...metadata, name: petugas || 'Petugas' } : metadata;
   }
 
   /**
@@ -17,14 +27,15 @@ class GeoMapManager {
     const el = document.getElementById(containerId);
     if (!el) return null;
 
-    // Check if Leaflet instance already exists
-    if (this.maps[containerId]) {
-      try {
-        if (typeof this.maps[containerId].remove === 'function') {
-          this.maps[containerId].remove();
-        }
-      } catch (e) {}
-      delete this.maps[containerId];
+    // Keep one instance per container. Replacing a map while Leaflet's zoom
+    // transition is pending leaves its callbacks pointing at removed panes.
+    const existingMap = this.maps[containerId];
+    if (existingMap) {
+      if (!existingMap.isFallback) {
+        existingMap.stop();
+        existingMap.invalidateSize({ animate: false, pan: false });
+      }
+      return existingMap;
     }
 
     const defaultLat = KCU_ORIGIN.lat;
@@ -63,7 +74,10 @@ class GeoMapManager {
         this.maps[containerId] = map;
         this.layers[containerId] = L.layerGroup().addTo(map);
 
-        setTimeout(() => map.invalidateSize(), 200);
+        map.on('zoomstart', () => {
+        map.closePopup();
+        });
+
         return map;
       } catch (e) {
         console.warn('Leaflet initialization fallback to SVG/Canvas:', e);
@@ -78,7 +92,7 @@ class GeoMapManager {
   /**
    * Render clusters, convex hulls, points, and origin hub marker
    */
-  renderClustering(containerId, points, mode = 'kmeans') {
+  renderClustering(containerId, points, mode = 'kmeans', polygons = null) {
     const map = this.maps[containerId];
     if (!map) return;
 
@@ -88,9 +102,9 @@ class GeoMapManager {
     }
 
     if (!map.isFallback && typeof L !== 'undefined') {
-      this.renderLeafletClustering(containerId, points, mode);
+      this.renderLeafletClustering(containerId, points, mode, polygons);
     } else {
-      this.renderFallbackClustering(containerId, points, mode);
+      this.renderFallbackClustering(containerId, points, mode, polygons);
     }
   }
 
@@ -104,6 +118,8 @@ class GeoMapManager {
     if (!map.isFallback && typeof L !== 'undefined') {
       const layerGroup = this.layers[containerId];
       if (layerGroup) layerGroup.clearLayers();
+      this.pointMarkers[containerId] = new Map();
+      if (this.clusterGroups) this.clusterGroups[containerId] = {};
 
       const kcuIcon = L.divIcon({
         className: 'kcu-marker-icon',
@@ -142,20 +158,30 @@ class GeoMapManager {
         `);
 
       if (layerGroup) layerGroup.addLayer(kcuMarker);
-      map.setView([KCU_ORIGIN.lat, KCU_ORIGIN.lng], 13);
+      map.setView([KCU_ORIGIN.lat, KCU_ORIGIN.lng], 13, { animate: false });
+    }
+    else {
+      const el = document.getElementById(containerId);
+      if (el) el.innerHTML = '<div class="empty-state">Belum ada titik untuk ditampilkan.</div>';
     }
   }
 
   /**
    * Render with Leaflet
    */
-  renderLeafletClustering(containerId, points, mode) {
+  renderLeafletClustering(containerId, points, mode, polygons = null) {
     const map = this.maps[containerId];
     const layerGroup = this.layers[containerId];
+
     layerGroup.clearLayers();
 
-    const clusterKey = mode === 'kmeans' ? 'c_init' : 'c_final';
+    // Reset referensi marker setiap kali peta dirender ulang
+    this.pointMarkers[containerId] = new Map();
+
+    this.clusterGroups = this.clusterGroups || {};
+    const clusterKey = mode === 'aktual' ? 'c_actual' : mode === 'kmeans' ? 'c_init' : 'c_final';
     const clusterGroups = {};
+    this.clusterGroups[containerId] = clusterGroups;
 
     points.forEach(pt => {
   const cId = Number(pt[clusterKey]);
@@ -214,15 +240,17 @@ class GeoMapManager {
 
     // 2. Draw Convex Hulls and Labels
 Object.keys(clusterGroups).forEach(clusterId => {
-  const cMeta = getClusterMetadata(clusterId);
+  const cMeta = this.groupMetadata(clusterId, mode, clusterGroups[clusterId][0].petugas);
   if (!cMeta) return;
 
   const pts = clusterGroups[clusterId];
   if (pts.length === 0) return;
 
-      
-      const hullCoords = GeoUtils.convexHull(pts);
-
+      // Ambil koordinat poligon langsung dari backend (Shapely), fallback ke GeoUtils.convexHull
+      const backendCoords = polygons && (polygons[clusterId] || polygons[String(clusterId)]);
+      const hullCoords = (Array.isArray(backendCoords) && backendCoords.length > 0)
+        ? backendCoords
+        : GeoUtils.convexHull(pts);
       if (hullCoords.length > 0) {
         const hullStyle = {
           color: '#374151',
@@ -249,9 +277,12 @@ Object.keys(clusterGroups).forEach(clusterId => {
         }
 
         hullLayer.bindTooltip(
-          `${cMeta.name} (Batas Convex Hull)`,
+          `${this.escapeHtml(cMeta.name)} (Batas Convex Hull)`,
           { sticky: true }
         );
+        hullLayer.on('click', () => {
+          this.zoomToCluster(clusterId, containerId);
+        });
 
         layerGroup.addLayer(hullLayer);
 
@@ -274,13 +305,17 @@ Object.keys(clusterGroups).forEach(clusterId => {
               gap: 4px;
             ">
               <span style="width: 8px; height: 8px; border-radius: 50%; background: ${cMeta.color};"></span>
-              ${cMeta.name}
+              ${this.escapeHtml(cMeta.name)}
             </div>
           `,
           iconAnchor: [38, 12]
         });
 
-        layerGroup.addLayer(L.marker([centroid.lat, centroid.lng], { icon: labelIcon }));
+        const labelMarker = L.marker([centroid.lat, centroid.lng], { icon: labelIcon });
+        labelMarker.on('click', () => {
+          this.zoomToCluster(clusterId, containerId);
+        });
+        layerGroup.addLayer(labelMarker);
       }
     });
 
@@ -288,7 +323,7 @@ Object.keys(clusterGroups).forEach(clusterId => {
 points.forEach(pt => {
   const cId = Number(pt[clusterKey]);
   const hasCluster = Number.isInteger(cId) && cId > 0;
-  const cMeta = hasCluster ? getClusterMetadata(cId) : null;
+  const cMeta = hasCluster ? this.groupMetadata(cId, mode, pt.petugas) : null;
 
       const circleMarker = L.circleMarker([pt.lat, pt.lng], {
         radius: 5,
@@ -299,12 +334,33 @@ points.forEach(pt => {
         fillOpacity: 0.85
       }).bindPopup(`
         <div style="font-family: inherit; font-size: 12px; line-height: 1.4;">
-          <strong style="color: #111827;">${pt.resi} (${pt.id})</strong><br>
-          <span style="color: #4b5563;">${pt.alamat}</span><br>
+          <strong style="color: #111827;">${this.escapeHtml(pt.resi)}</strong><br>
+          <span style="color: #4b5563;">${this.escapeHtml(pt.alamat)}</span><br>
           <div style="margin-top: 6px; display: flex; gap: 6px;">
             ${hasCluster ? `
   <span style="background: ${cMeta.fillColor}; color: ${cMeta.color}; font-weight: 600; padding: 2px 6px; border-radius: 4px; font-size: 11px;">
-    ${cMeta.name}
+    ${mode === 'aktual' ? `
+      <svg width="12" height="12" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round"
+           style="vertical-align: -2px; margin-right: 4px;"
+           aria-hidden="true">
+        <circle cx="12" cy="7" r="4"></circle>
+        <path d="M4 21v-2a8 8 0 0 1 16 0v2"></path>
+      </svg>
+    ` : ''}
+        ${mode !== 'aktual' ? `
+      <svg width="12" height="12" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round"
+           style="vertical-align: -2px; margin-right: 4px;"
+           aria-hidden="true">
+        <path d="m12 2 9 5-9 5-9-5 9-5Z"></path>
+        <path d="m3 12 9 5 9-5"></path>
+        <path d="m3 17 9 5 9-5"></path>
+      </svg>
+    ` : ''}
+    ${this.escapeHtml(cMeta.name)}
   </span>
 ` : `
   <span style="color: #64748b; font-size: 11px;">
@@ -312,26 +368,123 @@ points.forEach(pt => {
   </span>
 `}
 
-${hasCluster && pt.status === 'Berpindah'
-  ? '<span style="background: #fef3c7; color: #b45309; font-weight: 600; padding: 2px 6px; border-radius: 4px; font-size: 11px;">Direassignment</span>'
+
+${hasCluster && mode === 'hbcdp' && pt.status === 'Berpindah'
+  ? `<span style="background: #fef3c7; color: #b45309; font-weight: 600; padding: 2px 6px; border-radius: 4px; font-size: 11px;">
+       <svg width="12" height="12" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"
+            style="vertical-align: -2px; margin-right: 4px;"
+            aria-hidden="true">
+         <path d="M8 3 4 7l4 4"></path>
+         <path d="M4 7h16"></path>
+         <path d="m16 21 4-4-4-4"></path>
+         <path d="M20 17H4"></path>
+       </svg>
+       ${Number.isInteger(Number(pt.c_init)) && Number(pt.c_init) > 0
+         ? `Pindah dari Cluster ${Number(pt.c_init)}`
+         : 'Direassignment'}
+     </span>`
   : ''}
+
           </div>
         </div>
       `);
 
       layerGroup.addLayer(circleMarker);
-      bounds.push([pt.lat, pt.lng]);
-    });
+
+    if (pt.id !== undefined && pt.id !== null) {
+        this.pointMarkers[containerId].set(String(pt.id), circleMarker);
+    }
+
+    bounds.push([pt.lat, pt.lng]);
+        });
 
     if (bounds.length > 0) {
-      map.fitBounds(bounds, { padding: [35, 35], maxZoom: 14 });
+      // Dataset refreshes are state updates, not interactive zoom transitions.
+      map.fitBounds(bounds, { padding: [35, 35], maxZoom: 14, animate: false });
     }
   }
 
   /**
+   * Zoom langsung ke cluster yang dipilih (Revisi 29 Oktober)
+   * @param {number|string} clusterId Nomor/ID cluster
+   * @param {string} containerId ID elemen peta
+   */
+  zoomToCluster(clusterId, containerId = 'map-zona-large') {
+    const targetContainer = this.maps[containerId] ? containerId : (this.maps['map-zona-large'] ? 'map-zona-large' : containerId);
+    const map = this.maps[targetContainer];
+    if (!map || map.isFallback || typeof L === 'undefined') return;
+    containerId = targetContainer;
+
+    const groups = this.clusterGroups ? this.clusterGroups[containerId] : null;
+    if (!groups) return;
+
+    const pts = groups[Number(clusterId)] || groups[String(clusterId)];
+    if (!pts || pts.length === 0) return;
+
+    const coords = [];
+    pts.forEach(p => {
+      const lat = p.lat !== undefined ? Number(p.lat) : Number(p.latitude);
+      const lng = p.lng !== undefined ? Number(p.lng) : Number(p.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        coords.push([lat, lng]);
+      }
+    });
+
+    if (coords.length === 0) return;
+
+    if (coords.length === 1) {
+      map.setView(coords[0], 16, { animate: true });
+    } else {
+      const bounds = L.latLngBounds(coords);
+      map.fitBounds(bounds, {
+        padding: [60, 60],
+        maxZoom: 16,
+        animate: true
+      });
+    }
+  }
+
+
+  /**
+ * Zoom ke titik pengiriman berdasarkan ID
+ * @param {number|string} pointId ID titik pengiriman
+ * @param {string} containerId ID container peta
+ */
+  zoomToPoint(pointId, containerId = 'map-zona-large') {
+    const map = this.maps[containerId];
+
+    if (!map || map.isFallback || typeof L === 'undefined') {
+        return false;
+    }
+
+    const marker = this.pointMarkers[containerId]?.get(String(pointId));
+
+    if (!marker) {
+        console.warn('Marker tidak ditemukan:', pointId);
+        return false;
+    }
+
+    map.stop();
+    map.invalidateSize({ animate: false });
+
+    const latlng = marker.getLatLng();
+
+    map.setView(latlng, 17, { animate: false });
+    marker.openPopup();
+
+    document.getElementById(containerId)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+    });
+
+    return true;
+}
+  /**
    * Offline SVG / Canvas Fallback Renderer
    */
-  renderFallbackClustering(containerId, points, mode) {
+  renderFallbackClustering(containerId, points, mode, polygons = null) {
     const el = document.getElementById(containerId);
     if (!el) return;
 
@@ -352,7 +505,7 @@ ${hasCluster && pt.status === 'Berpindah'
     const toX = (lng) => padding + ((lng - minLng) / (maxLng - minLng || 0.01)) * (width - 2 * padding);
     const toY = (lat) => height - (padding + ((lat - minLat) / (maxLat - minLat || 0.01)) * (height - 2 * padding));
 
-    const clusterKey = mode === 'kmeans' ? 'c_init' : 'c_final';
+    const clusterKey = mode === 'aktual' ? 'c_actual' : mode === 'kmeans' ? 'c_init' : 'c_final';
     const clusterGroups = {};
     points.forEach(pt => {
   const cId = Number(pt[clusterKey]);
@@ -376,14 +529,16 @@ ${hasCluster && pt.status === 'Berpindah'
 
     
     Object.keys(clusterGroups).forEach(clusterId => {
-  const cMeta = getClusterMetadata(clusterId);
+  const cMeta = this.groupMetadata(clusterId, mode, clusterGroups[clusterId][0].petugas);
   if (!cMeta) return;
 
   const pts = clusterGroups[clusterId];
   if (pts.length === 0) return;
 
-      const hullCoords = GeoUtils.convexHull(pts);
-      if (hullCoords.length === 0) return;
+      const backendCoords = polygons && (polygons[clusterId] || polygons[String(clusterId)]);
+      const hullCoords = (Array.isArray(backendCoords) && backendCoords.length > 0)
+        ? backendCoords
+        : GeoUtils.convexHull(pts);
 
       const toSvgPoint = coord => ({
         x: toX(coord[1]),
@@ -455,14 +610,14 @@ ${hasCluster && pt.status === 'Berpindah'
                 fill="${cMeta.color}" />
         <text x="${cx - 10}" y="${cy + 4}"
               font-size="10" font-weight="700"
-              fill="#1f2937">${cMeta.name}</text>
+              fill="#1f2937">${this.escapeHtml(cMeta.name)}</text>
       `;
     });
 
     points.forEach(pt => {
   const cId = Number(pt[clusterKey]);
   const hasCluster = Number.isInteger(cId) && cId > 0;
-  const cMeta = hasCluster ? getClusterMetadata(cId) : null;
+  const cMeta = hasCluster ? this.groupMetadata(cId, mode, pt.petugas) : null;
   const pointColor = cMeta ? cMeta.color : '#1c2d5a';
 
   const px = toX(pt.lng);
@@ -470,7 +625,7 @@ ${hasCluster && pt.status === 'Berpindah'
 
   svgContent += `
     <circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${pointColor}" stroke="#111827" stroke-width="1">
-      <title>${pt.resi}: ${pt.alamat}</title>
+      <title>${this.escapeHtml(pt.resi)}: ${this.escapeHtml(pt.alamat)}${mode === 'aktual' ? ' — ' + this.escapeHtml(pt.petugas || 'Petugas N/A') : ''}</title>
     </circle>
   `;
 });

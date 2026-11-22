@@ -37,6 +37,8 @@ def execute_db(query, params=None, returning_id=False):
             return cur.rowcount
 
 
+
+
 def execute_upload_transaction(
     ds_insert_sql,
     ds_params,
@@ -59,10 +61,19 @@ def execute_upload_transaction(
             id_dataset = cur.fetchone()[0]
 
             # 2. Simpan seluruh data pengiriman valid
-            for resi, alamat_asli, _ in valid_rows:
-                alamat_bersih = (
-                    geocoding_service.bersihkanAlamat(alamat_asli)
-                )
+            for item in valid_rows:
+                if isinstance(item, dict):
+                    resi = item.get("resi", "")
+                    alamat_asli = item.get("alamat_asli", "")
+                    alamat_bersih = item.get("alamat_bersih", "")
+                    petugas = item.get("petugas")
+                    kota = item.get("kota", "")
+                else:
+                    resi = item[0]
+                    alamat_asli = item[1]
+                    alamat_bersih = item[2]
+                    petugas = item[3] if len(item) > 3 else None
+                    kota = item[4] if len(item) > 4 else ""
 
                 cur.execute(
                     dp_insert_sql,
@@ -71,11 +82,14 @@ def execute_upload_transaction(
                         resi,
                         alamat_asli,
                         alamat_bersih,
-                        "PENDING"
+                        "PENDING",
+                        petugas,
+                        kota
                     )
                 )
 
-            # 3. Catat riwayat upload
+            # 3. Catat riwayat upload sekali saja
+            # setelah seluruh data pengiriman tersimpan
             cur.execute(
                 hist_sql,
                 (
@@ -85,4 +99,51 @@ def execute_upload_transaction(
                 )
             )
 
+            # 4. Kembalikan ID dataset
             return id_dataset
+
+
+def get_actual_evaluation(id_dataset):
+    """Baseline tersimpan; membaca tidak pernah memicu perhitungan ulang."""
+    return query_db("""
+        SELECT id_evaluasi, id_dataset, jumlah_titik_geocoding,
+               jumlah_titik_evaluasi, jumlah_kurir_aktual,
+               silhouette_score, dbi, z1, status_evaluasi, alasan_na,
+               distribusi, sidik_data, dihitung_pada::text
+        FROM evaluasi_aktual WHERE id_dataset = %s;
+    """, (id_dataset,), one=True)
+
+
+def save_actual_evaluation(id_dataset, evaluation):
+    """Simpan satu baseline untuk keadaan titik/Petugas dataset saat ini."""
+    from psycopg2.extras import Json
+
+    return query_db("""
+        INSERT INTO evaluasi_aktual (
+            id_dataset, jumlah_titik_geocoding, jumlah_titik_evaluasi,
+            jumlah_kurir_aktual, silhouette_score, dbi, z1,
+            status_evaluasi, alasan_na, distribusi, sidik_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id_dataset) DO UPDATE SET
+            jumlah_titik_geocoding = EXCLUDED.jumlah_titik_geocoding,
+            jumlah_titik_evaluasi = EXCLUDED.jumlah_titik_evaluasi,
+            jumlah_kurir_aktual = EXCLUDED.jumlah_kurir_aktual,
+            silhouette_score = EXCLUDED.silhouette_score,
+            dbi = EXCLUDED.dbi,
+            z1 = EXCLUDED.z1,
+            status_evaluasi = EXCLUDED.status_evaluasi,
+            alasan_na = EXCLUDED.alasan_na,
+            distribusi = EXCLUDED.distribusi,
+            sidik_data = EXCLUDED.sidik_data,
+            dihitung_pada = CURRENT_TIMESTAMP
+        RETURNING id_evaluasi, id_dataset, jumlah_titik_geocoding,
+                  jumlah_titik_evaluasi, jumlah_kurir_aktual,
+                  silhouette_score, dbi, z1, status_evaluasi, alasan_na,
+                  distribusi, sidik_data, dihitung_pada::text;
+    """, (
+        id_dataset, evaluation["jumlah_titik_geocoding"],
+        evaluation["jumlah_titik_evaluasi"], evaluation["jumlah_kurir_aktual"],
+        evaluation["silhouette_score"], evaluation["dbi"], evaluation["z1"],
+        evaluation["status_evaluasi"], evaluation["alasan_na"],
+        Json(evaluation["distribusi"]), evaluation["sidik_data"]
+    ), one=True)

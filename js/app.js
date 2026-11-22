@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     currentView: 'dashboard',
     activeDatasetKey: null, // Default null: tidak memuat data dummy statis
     zonaMode: 'kmeans', // 'kmeans' | 'hbcdp'
+    distributionMode: 'aktual',
     tableSearchQuery: '',
     tableCurrentPage: 1,
     tablePageSize: 5,
@@ -24,10 +25,11 @@ document.addEventListener('DOMContentLoaded', () => {
     deleteDatasetError: '',
 
 // Status proses upload hingga clustering
-uploadStatus: 'idle', // idle, uploading, geocoding, ready, error
+uploadStatus: 'idle',
 readyDatasetId: null,
 geocodedPointCount: 0,
-isClustering: false
+isClustering: false,
+completedClusteringDatasetId: null
   };
 
   // DOM Elements
@@ -47,6 +49,7 @@ isClustering: false
   // Tab buttons for Hasil Pembagian Zona
   const tabKmeans = document.getElementById('tab-kmeans');
   const tabHbcdp = document.getElementById('tab-hbcdp');
+  const tabAktual = document.getElementById('tab-aktual');
   const zonaMapTitle = document.getElementById('zona-map-title');
   const zonaSummaryTitle = document.getElementById('zona-summary-title');
 
@@ -70,6 +73,7 @@ isClustering: false
   ? btnStartClustering.innerHTML
   : '';
 
+
 function updateClusteringButtonState() {
   if (!btnStartClustering) return;
 
@@ -78,9 +82,13 @@ function updateClusteringButtonState() {
     state.readyDatasetId != null &&
     state.geocodedPointCount >= 3;
 
-  btnStartClustering.disabled = !isReady || state.isClustering;
+  const isCompleted =
+    isReady &&
+    state.completedClusteringDatasetId === state.readyDatasetId;
 
-  // Ubah tampilan tanpa mengubah CSS utama
+  btnStartClustering.disabled =
+    !isReady || state.isClustering || isCompleted;
+
   btnStartClustering.style.opacity =
     state.isClustering || isReady ? '1' : '0.55';
 
@@ -88,15 +96,38 @@ function updateClusteringButtonState() {
     state.isClustering || isReady ? '' : 'grayscale(1)';
 
   btnStartClustering.style.cursor =
-    state.isClustering ? 'wait' :
-    isReady ? 'pointer' : 'not-allowed';
+    state.isClustering
+      ? 'wait'
+      : isCompleted || !isReady
+        ? 'not-allowed'
+        : 'pointer';
+
+  btnStartClustering.style.background =
+    isCompleted ? '#16803c' : '';
 
   if (!state.isClustering) {
-    btnStartClustering.innerHTML = clusteringBtnDefaultHtml;
+    if (isCompleted) {
+      btnStartClustering.innerHTML = `
+        <svg width="18" height="18"
+             viewBox="0 0 24 24"
+             fill="none"
+             stroke="currentColor"
+             stroke-width="2.5"
+             stroke-linecap="round"
+             stroke-linejoin="round">
+          <path d="M20 6 9 17l-5-5"></path>
+        </svg>
+        Clustering Selesai
+      `;
+    } else {
+      btnStartClustering.innerHTML = clusteringBtnDefaultHtml;
+    }
   }
 
   if (state.isClustering) {
     btnStartClustering.title = 'Clustering sedang berlangsung';
+  } else if (isCompleted) {
+    btnStartClustering.title = 'Clustering berhasil diselesaikan';
   } else if (state.uploadStatus === 'uploading') {
     btnStartClustering.title = 'Tunggu proses upload dan preprocessing';
   } else if (state.uploadStatus === 'geocoding') {
@@ -109,6 +140,7 @@ function updateClusteringButtonState() {
   }
 }
 
+
   // Geocoding progress
   const progressBarFill = document.getElementById('progress-bar-fill');
   const progressTextLabel = document.getElementById('progress-text-label');
@@ -118,13 +150,17 @@ function updateClusteringButtonState() {
   const btnDownloadExcel = document.getElementById('btn-download-excel');
   const btnDownloadCsv = document.getElementById('btn-download-csv');
   const btnDownloadResultCsv = document.getElementById('btn-download-result-csv');
+  const btnDownloadMap = document.getElementById('btn-download-map');
 
   // ------------------------------------------------------------------------
   // 1. Navigation & Routing
   // ------------------------------------------------------------------------
   function switchView(viewId) {
-    state.currentView = viewId;
-    window.location.hash = viewId;
+  const previousView = state.currentView;
+
+  state.currentView = viewId;
+  window.location.hash = viewId;
+
 
     navItems.forEach(item => {
       if (item.dataset.view === viewId) {
@@ -254,6 +290,11 @@ function updateClusteringButtonState() {
         }
         state.activeDatasetKey = null;
         state.currentDbDatasetId = null;
+        if (
+          state.uploadStatus !== 'uploading' &&
+          state.uploadStatus !== 'geocoding' &&
+          !state.isClustering
+        ) 
         updateDashboardView();
         updateZonaSummary();
         renderAnggotaTable();
@@ -265,6 +306,13 @@ function updateClusteringButtonState() {
         processSelector.innerHTML = '<option value="none">-- Belum ada dataset (Silakan unggah) --</option>';
       }
       state.activeDatasetKey = null;
+      if (
+        state.uploadStatus !== 'uploading' &&
+        state.uploadStatus !== 'geocoding' &&
+        !state.isClustering
+      ) {
+        resetUploadReadiness();
+      }
       updateDashboardView();
       updateZonaSummary();
       renderAnggotaTable();
@@ -420,6 +468,7 @@ function updateClusteringButtonState() {
         state.readyDatasetId = null;
         state.geocodedPointCount = 0;
         state.uploadStatus = 'idle';
+        updateActualPanel(null);
         updateClusteringButtonState();
       }
       state.deleteDatasetError = '';
@@ -469,10 +518,12 @@ function updateClusteringButtonState() {
         const dsKey = `db_${id_dataset}`;
         state.currentDbDatasetId = id_dataset;
 
-        // Hitung jumlah titik yang benar-benar diproses clustering
-        const processedCount = (d.clusters_kmeans && d.clusters_kmeans.length > 0)
-          ? d.clusters_kmeans.reduce((sum, c) => sum + (c.jumlah_anggota || 0), 0)
-          : d.dataset.jumlah_data;
+        // N adalah seluruh titik dengan koordinat hasil geocoding, bukan subset evaluasi.
+        const validPoints = (pointsJson.data || []).filter(pt =>
+          (pt.latitude ?? pt.lat) != null && (pt.longitude ?? pt.lng) != null &&
+          Number.isFinite(Number(pt.latitude ?? pt.lat)) && Number.isFinite(Number(pt.longitude ?? pt.lng)) &&
+          (!pt.status_geocoding || String(pt.status_geocoding).toUpperCase() === 'SUCCESS'));
+        const processedCount = d.aktual?.jumlah_titik_geocoding ?? validPoints.length;
 
         // Periksa apakah hasil clustering benar-benar tersedia
 const hasKmeansResult =
@@ -491,6 +542,8 @@ DATASETS[dsKey] = {
           totalPoints: processedCount,
           rawTotalPoints: d.dataset.jumlah_data,
           fileName: d.dataset.nama_file,
+          aktual: d.aktual || null,
+          perbandingan: d.perbandingan || null,
           k: hasKmeansResult
   ? (
       d.clustering && d.clustering.jumlah_cluster != null
@@ -515,7 +568,7 @@ DATASETS[dsKey] = {
               silhouette: (d.clustering && d.clustering.silhouette_score != null) ? d.clustering.silhouette_score : null,
               dbi: (d.clustering && d.clustering.dbi != null) ? d.clustering.dbi : null,
               z1: (d.clustering && d.clustering.z1 != null) ? d.clustering.z1 : null,
-              z2: 0.00
+              z2: hasKmeansResult ? 0 : null
             },
             hbcdp: {
               silhouette: (d.optimasi && d.optimasi.silhouette_score != null) ? d.optimasi.silhouette_score : null,
@@ -527,17 +580,20 @@ DATASETS[dsKey] = {
               ? d.optimasi.steps
               : []
           },
-          points: (pointsJson.data || []).map((pt, i) => {
+          points: validPoints.map((pt, i) => {
   const cInit = hasKmeansResult ? (pt.c_init ?? null) : null;
   const cFinal = hasHbcdpResult ? (pt.c_final ?? null) : null;
 
   return {
     id: `A${i + 1}`,
     resi: pt.nosi ?? '-',
+    id_pengiriman: pt.id_pengiriman,
+    petugas: typeof pt.petugas === 'string' && pt.petugas.trim() ? pt.petugas.trim().replace(/\s+/g, ' ') : null,
+    status_geocoding: pt.status_geocoding,
     alamat: pt.alamat_bersih || pt.alamat_asli,
     kecamatan: 'Malang',
-    lat: pt.latitude || KCU_ORIGIN.lat,
-    lng: pt.longitude || KCU_ORIGIN.lng,
+    lat: Number(pt.latitude ?? pt.lat),
+    lng: Number(pt.longitude ?? pt.lng),
 
     c_init: cInit,
     c_final: cFinal,
@@ -545,15 +601,46 @@ DATASETS[dsKey] = {
     status: cInit != null && cFinal != null
       ? (pt.status || (cFinal !== cInit ? 'Berpindah' : 'Tetap'))
       : null
-  };
-})
-        };
-
+          };
+        }),
+        polygons: d.polygons || {
+          kmeans: d.polygons_kmeans || {},
+          hbcdp: d.polygons_hbcdp || {}
+        }
+      };
+        const actualCounts = new Map();
+        DATASETS[dsKey].points.forEach(pt => {
+          if (pt.petugas) {
+          const name = pt.petugas.toUpperCase();
+          actualCounts.set(name, (actualCounts.get(name) || 0) + 1);
+        }
+        });
+        const actualNames = [...actualCounts.keys()].sort();
+        const actualIds = new Map(actualNames.map((name, index) => [name, index + 1]));
+        DATASETS[dsKey].points.forEach(pt => {
+        pt.c_actual = actualIds.get(pt.petugas?.toUpperCase()) ?? null;
+      });
+        DATASETS[dsKey].clusters.aktual = actualNames.map(name => ({
+          id: actualIds.get(name), name, count: actualCounts.get(name)
+        }));
+        DATASETS[dsKey].waktu_komputasi_str = d.clustering ? (d.clustering.waktu_komputasi_str || '-') : '-';
+        DATASETS[dsKey].preprocessing = d.dataset.preprocessing;
+        DATASETS[dsKey].geocoding_summary = d.geocoding_summary;
+        // Sinkronkan tampilan geocoding hanya untuk dataset sesi upload aktif
+        if (
+          state.readyDatasetId === id_dataset &&
+          d.geocoding_summary
+        ) {
+          updateGeocodingDisplay(d.geocoding_summary);
+        }
         state.activeDatasetKey = dsKey;
         updateDashboardView();
         updateZonaSummary();
         renderAnggotaTable();
         updateEvaluasiView();
+        if (state.currentView === 'zona') {
+          renderZonaMap();
+        }
       }
     } catch (err) {
       console.error('Error loading dataset from DB:', err);
@@ -569,6 +656,8 @@ DATASETS[dsKey] = {
 
     const kpiTitik = document.getElementById('kpi-jumlah-titik');
     const kpiCluster = document.getElementById('kpi-jumlah-cluster');
+    const kpiAktual = document.getElementById('kpi-kurir-aktual');
+    if (kpiAktual) kpiAktual.textContent = ds?.aktual?.jumlah_kurir_aktual ?? 'N/A';
 
     if (!ds) {
       if (kpiTitik) kpiTitik.textContent = '-';
@@ -590,108 +679,192 @@ if (kpiCluster) {
       : '-';
 }
 
-    updateEvaluationTable(ds.evaluation);
-    updateClusterDistributionTable(ds.clusters);
+    updateEvaluationTable(ds);
+    updateClusterDistributionTable(ds);
     renderDashboardMaps();
   }
 
-  function updateEvaluationTable(evaluation) {
-    const kmSilhouette = document.getElementById('eval-km-silhouette');
-    const hbSilhouette = document.getElementById('eval-hb-silhouette');
-    const kmDbi = document.getElementById('eval-km-dbi');
-    const hbDbi = document.getElementById('eval-hb-dbi');
-    const kmZ1 = document.getElementById('eval-km-z1');
-    const hbZ1 = document.getElementById('eval-hb-z1');
-    const kmZ2 = document.getElementById('eval-km-z2');
-    const hbZ2 = document.getElementById('eval-hb-z2');
-
-    if (!evaluation) {
-      [kmSilhouette, hbSilhouette, kmDbi, hbDbi, kmZ1, hbZ1, kmZ2, hbZ2].forEach(el => {
-        if (el) el.textContent = '-';
-      });
-      return;
-    }
-
-    if (kmSilhouette) kmSilhouette.textContent = (evaluation.kmeans && evaluation.kmeans.silhouette != null) ? evaluation.kmeans.silhouette.toFixed(3) : '-';
-    if (hbSilhouette) hbSilhouette.textContent = (evaluation.hbcdp && evaluation.hbcdp.silhouette != null) ? evaluation.hbcdp.silhouette.toFixed(3) : '-';
-    if (kmDbi) kmDbi.textContent = (evaluation.kmeans && evaluation.kmeans.dbi != null) ? evaluation.kmeans.dbi.toFixed(3) : '-';
-    if (hbDbi) hbDbi.textContent = (evaluation.hbcdp && evaluation.hbcdp.dbi != null) ? evaluation.hbcdp.dbi.toFixed(3) : '-';
-    if (kmZ1) kmZ1.textContent = (evaluation.kmeans && evaluation.kmeans.z1 != null) ? GeoUtils.formatNumber(evaluation.kmeans.z1, 2) : '-';
-    if (hbZ1) hbZ1.textContent = (evaluation.hbcdp && evaluation.hbcdp.z1 != null) ? GeoUtils.formatNumber(evaluation.hbcdp.z1, 2) : '-';
-    if (kmZ2) kmZ2.textContent = (evaluation.kmeans && evaluation.kmeans.z2 != null) ? `${GeoUtils.formatNumber(evaluation.kmeans.z2, 2)} m` : '-';
-    if (hbZ2) hbZ2.textContent = (evaluation.hbcdp && evaluation.hbcdp.z2 != null) ? `${GeoUtils.formatNumber(evaluation.hbcdp.z2, 2)} m` : '-';
+  function metricText(value, digits = 3) {
+    return value == null || !Number.isFinite(Number(value)) ? 'N/A' : GeoUtils.formatNumber(Number(value), digits);
   }
 
-  function updateClusterDistributionTable(clusters) {
+  function comparisonMetrics(ds, mode) {
+    const original = ds?.evaluation?.[mode] || {};
+    const saved = ds?.perbandingan?.[mode];
+    return saved ? { silhouette: saved.silhouette_score, dbi: saved.dbi, z1: saved.z1, z2: original.z2 } : original;
+  }
+
+  function comparisonScope(ds) {
+    if (!ds) return 'Belum ada dataset.';
+    const n = ds.perbandingan?.jumlah_titik_evaluasi ?? ds.aktual?.jumlah_titik_evaluasi ?? 0;
+    if (!ds.perbandingan) return `Baseline aktual: N evaluasi (Petugas valid) = ${GeoUtils.formatNumber(n)}; N geocoding = ${GeoUtils.formatNumber(ds.totalPoints)}. Perbandingan tersimpan belum tersedia; metrik algoritma yang tersedia merupakan diagnostik seluruh titik.`;
+    const scope = ds.perbandingan.scope === 'seluruh_titik' ? 'seluruh titik geocoding (baseline aktual tidak tersedia)' : 'titik dengan Petugas valid yang sama; penugasan algoritma tidak dihitung ulang';
+    return `Perbandingan SS / DBI / Z₁: ${scope}. N evaluasi = ${GeoUtils.formatNumber(n)}; N geocoding = ${GeoUtils.formatNumber(ds.totalPoints)}. Z₂ dan tahap HBCDP adalah diagnostik seluruh titik.`;
+  }
+
+  function algorithmMetricReasons(ds) {
+    return ['kmeans', 'hbcdp'].map(mode => {
+      const reason = ds?.perbandingan?.[mode]?.alasan_na;
+      return reason ? `${mode === 'kmeans' ? 'K-Means' : 'HBCDP'}: ${reason}` : '';
+    }).filter(Boolean).join(' ');
+  }
+
+  function fillMetricElements(prefix, values) {
+    ['silhouette', 'dbi', 'z1', 'z2'].forEach(key => {
+      const el = document.getElementById(`${prefix}-${key}`);
+      if (el) el.textContent = metricText(values?.[key], key === 'z1' || key === 'z2' ? 2 : 3) + (key === 'z2' && values?.[key] != null ? ' m' : '');
+    });
+  }
+
+  function updateEvaluationTable(ds) {
+    fillMetricElements('eval-actual', { silhouette: ds?.aktual?.silhouette_score, dbi: ds?.aktual?.dbi, z1: ds?.aktual?.z1 });
+    fillMetricElements('eval-km', comparisonMetrics(ds, 'kmeans'));
+    fillMetricElements('eval-hb', comparisonMetrics(ds, 'hbcdp'));
+    const scope = document.getElementById('dashboard-comparison-scope');
+    if (scope) scope.textContent = comparisonScope(ds);
+    const reason = document.getElementById('dashboard-actual-reason');
+    if (reason) reason.textContent = ds?.aktual?.alasan_na || (!ds?.aktual ? 'Baseline aktual belum dihitung.' : '');
+    const algorithmReason = document.getElementById('dashboard-algorithm-reason');
+    if (algorithmReason) algorithmReason.textContent = algorithmMetricReasons(ds);
+  }
+
+
+function updateActualPanel(actual) {
+  const panel = document.getElementById('actual-baseline-panel');
+  if (!panel) return;
+
+  panel.hidden = !actual;
+  if (!actual) return;
+
+  const formatCount = value =>
+    value == null || !Number.isFinite(Number(value))
+      ? 'N/A'
+      : GeoUtils.formatNumber(Number(value));
+
+  // Ringkasan jumlah titik dan kurir
+  document.getElementById('actual-baseline-counts').textContent =
+    `Titik berhasil geocoding: ${formatCount(actual.jumlah_titik_geocoding)} · ` +
+    `Titik dievaluasi (Petugas valid): ${formatCount(actual.jumlah_titik_evaluasi)} · ` +
+    `Kurir aktual: ${formatCount(actual.jumlah_kurir_aktual)}`;
+
+  // Terjemahkan status backend untuk tampilan
+  const rawStatus = String(actual.status_evaluasi ?? '').trim();
+  const normalizedStatus = rawStatus.toUpperCase().replace(/[\s-]+/g, '_');
+
+  const statusLabels = {
+    PARTIAL: 'Sebagian metrik tersedia',
+    PARTIALLY_AVAILABLE: 'Sebagian metrik tersedia',
+    SEBAGIAN: 'Sebagian metrik tersedia',
+    SEBAGIAN_METRIK_TERSEDIA: 'Sebagian metrik tersedia',
+    TERSEDIA: 'Metrik evaluasi aktual tersedia (Z₂ tidak berlaku)',
+    COMPLETE: 'Metrik evaluasi aktual tersedia (Z₂ tidak berlaku)',
+    COMPLETED: 'Metrik evaluasi aktual tersedia (Z₂ tidak berlaku)',
+    AVAILABLE: 'Metrik evaluasi aktual tersedia (Z₂ tidak berlaku)',
+    LENGKAP: 'Metrik evaluasi aktual tersedia (Z₂ tidak berlaku)',
+    UNAVAILABLE: 'Metrik belum tersedia',
+    NOT_AVAILABLE: 'Metrik belum tersedia',
+    TIDAK_TERSEDIA: 'Metrik belum tersedia'
+  };
+
+  const statusText = statusLabels[normalizedStatus] ||
+    (/PARTIAL|SEBAGIAN/.test(normalizedStatus)
+      ? 'Sebagian metrik tersedia'
+      : (rawStatus ? rawStatus.replace(/_/g, ' ') : 'Belum tersedia'));
+
+  document.getElementById('actual-baseline-status').textContent =
+    `Status evaluasi: ${statusText}`;
+
+  document.getElementById('actual-baseline-reason').textContent =
+    actual.alasan_na ||
+    'Baseline aktual tersimpan. K tetap ditentukan manual dan boleh berbeda dari jumlah kurir aktual.';
+
+  fillMetricElements('upload-actual', {
+    silhouette: actual.silhouette_score,
+    dbi: actual.dbi,
+    z1: actual.z1
+  });
+}
+
+
+  function resetUploadReadiness() {
+  state.readyDatasetId = null;
+  state.geocodedPointCount = 0;
+  state.uploadStatus = 'idle';
+  state.completedClusteringDatasetId = null;
+
+  updateActualPanel(null);
+  updateClusteringButtonState();
+}
+
+  function updateClusterDistributionTable(ds) {
     const tbody = document.getElementById('table-cluster-distribution-body');
     if (!tbody) return;
-
-    if (!clusters || !clusters.kmeans || clusters.kmeans.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #64748b; padding: 24px;">Belum ada data cluster. Silakan unggah dataset.</td></tr>';
-      return;
-    }
-
-    let rowsHtml = '';
-    const maxK = Math.max(clusters.kmeans.length, (clusters.hbcdp || []).length);
-    for (let i = 0; i < maxK; i++) {
-      const km = clusters.kmeans[i] || { count: '-' };
-      const hb = (clusters.hbcdp && clusters.hbcdp[i]) || { count: '-' };
-      const cMeta = getClusterMetadata(i + 1);
-      rowsHtml += `
-        <tr>
-          <td>
-  <span style="display: inline-flex; align-items: center; gap: 8px;">
-    <span style="
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: ${cMeta.color};
-    "></span>
-    Cluster ${i + 1}
-  </span>
-</td>
-          <td style="text-align: center;">${typeof km.count === 'number' ? GeoUtils.formatNumber(km.count) : km.count}</td>
-          <td style="text-align: center;">${typeof hb.count === 'number' ? GeoUtils.formatNumber(hb.count) : hb.count}</td>
-        </tr>
-      `;
-    }
-    tbody.innerHTML = rowsHtml;
+    const groups = ds?.clusters?.[state.distributionMode] || [];
+    const label = document.getElementById('distribution-group-label');
+    if (label) label.textContent = state.distributionMode === 'aktual' ? 'Petugas' : 'Cluster';
+    tbody.innerHTML = groups.length ? groups.map(c => {
+      const color = getClusterMetadata(c.id).color;
+      return `<tr><td><span style="color:${color}">●</span> ${escapeHtml(c.name)}</td><td style="text-align:center">${GeoUtils.formatNumber(c.count)}</td></tr>`;
+    }).join('') : '<tr><td colspan="2" class="empty-state">Belum ada kelompok yang tersedia.</td></tr>';
   }
+
+  document.querySelectorAll('[data-distribution-mode]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.distributionMode = button.dataset.distributionMode;
+      document.querySelectorAll('[data-distribution-mode]').forEach(tab => tab.classList.toggle('active', tab === button));
+      updateClusterDistributionTable(DATASETS[state.activeDatasetKey] || null);
+    });
+  });
 
   // ------------------------------------------------------------------------
   // 4. Map Rendering
   // ------------------------------------------------------------------------
-  function renderDashboardMaps() {
-    mapManager.initMap('map-kmeans-dash');
-    mapManager.initMap('map-hbcdp-dash');
-
-    const ds = state.activeDatasetKey ? DATASETS[state.activeDatasetKey] : null;
-    if (!ds || !ds.points || ds.points.length === 0) {
-      setTimeout(() => {
-        mapManager.renderEmptyMap('map-kmeans-dash');
-        mapManager.renderEmptyMap('map-hbcdp-dash');
-      }, 100);
-      return;
-    }
-
-    setTimeout(() => {
-      mapManager.renderClustering('map-kmeans-dash', ds.points, 'kmeans');
-      mapManager.renderClustering('map-hbcdp-dash', ds.points, 'hbcdp');
-    }, 100);
+  function actualPoints(ds) {
+    return (ds?.points || []).filter(pt => pt.petugas && pt.c_actual != null);
   }
 
+  function renderDashboardMaps() {
+    const ds = DATASETS[state.activeDatasetKey] || null;
+    ['aktual', 'kmeans', 'hbcdp'].forEach(mode => {
+      const id = mode === 'aktual' ? 'map-actual-dash' : `map-${mode}-dash`;
+      mapManager.initMap(id);
+      const points = mode === 'aktual' ? actualPoints(ds) : (ds?.points || []);
+      setTimeout(() => mapManager.renderClustering(id, points, mode, ds?.polygons?.[mode]), 100);
+    });
+    const message = document.getElementById('actual-map-message');
+
+    if (message) {
+      message.textContent = actualPoints(ds).length
+        ? 'Menampilkan titik pengiriman berdasarkan petugas aktual, dengan warna berbeda untuk setiap petugas.'
+        : 'Peta aktual belum tersedia karena belum ada titik pengiriman dengan nama petugas dan koordinat yang valid.';
+    }
+  }
   function renderZonaMap() {
     mapManager.initMap('map-zona-large', { zoom: 12 });
 
     const ds = state.activeDatasetKey ? DATASETS[state.activeDatasetKey] : null;
-    if (!ds || !ds.points || ds.points.length === 0) {
+    const points = state.zonaMode === 'aktual' ? actualPoints(ds) : (ds?.points || []);
+  
+    const message = document.getElementById('zona-actual-message');
+
+    if (message) {
+      if (state.zonaMode === 'aktual') {
+        message.textContent = points.length
+          ? 'Menampilkan titik pengiriman berdasarkan pembagian tugas aktual PT Pos, beserta nama petugas yang menangani pengiriman.'
+          : 'Peta aktual tidak tersedia karena belum ada titik pengiriman dengan Petugas valid.';
+      } else if (state.zonaMode === 'kmeans') {
+        message.textContent = 'Menampilkan hasil pengelompokan awal titik pengiriman menggunakan algoritma K-Means++, sebelum dilakukan proses penyeimbangan cluster.';
+      } else if (state.zonaMode === 'hbcdp') {
+        message.textContent = 'Menampilkan hasil pembagian zona pengiriman setelah proses penyeimbangan cluster menggunakan HBCDP, beserta informasi perpindahan titik antar-cluster jika terjadi.';
+      }
+    }
+    if (!points.length) {
       setTimeout(() => {
         mapManager.renderEmptyMap('map-zona-large');
       }, 100);
     } else {
       setTimeout(() => {
-        mapManager.renderClustering('map-zona-large', ds.points, state.zonaMode);
+        mapManager.renderClustering('map-zona-large', points, state.zonaMode, ds?.polygons?.[state.zonaMode]);
       }, 100);
     }
 
@@ -702,25 +875,18 @@ if (kpiCluster) {
   // ------------------------------------------------------------------------
   // 5. Hasil Pembagian Zona Page Handlers
   // ------------------------------------------------------------------------
-  if (tabKmeans && tabHbcdp) {
-    tabKmeans.addEventListener('click', () => {
-      state.zonaMode = 'kmeans';
-      tabKmeans.classList.add('active');
-      tabHbcdp.classList.remove('active');
-      if (zonaMapTitle) zonaMapTitle.textContent = 'Visualisasi Zona - K-Means Awal';
-      if (zonaSummaryTitle) zonaSummaryTitle.textContent = 'Ringkasan Jumlah Titik per Cluster (K-Means Awal)';
+  [['aktual', tabAktual], ['kmeans', tabKmeans], ['hbcdp', tabHbcdp]].forEach(([mode, tab]) => {
+    tab?.addEventListener('click', () => {
+      state.zonaMode = mode;
+      state.tableCurrentPage = 1;
+      [tabAktual, tabKmeans, tabHbcdp].forEach(button => button?.classList.toggle('active', button === tab));
+      const title = mode === 'aktual' ? 'Aktual PT Pos' : mode === 'kmeans' ? 'K-Means Awal' : 'HBCDP (Hasil Akhir)';
+      if (zonaMapTitle) zonaMapTitle.textContent = `Visualisasi Zona - ${title}`;
+      if (zonaSummaryTitle) zonaSummaryTitle.textContent = `Ringkasan Jumlah Titik - ${title}`;
+      document.getElementById('anggota-group-heading').textContent = mode === 'aktual' ? 'Petugas Aktual' : 'Cluster';
       renderZonaMap();
     });
-
-    tabHbcdp.addEventListener('click', () => {
-      state.zonaMode = 'hbcdp';
-      tabHbcdp.classList.add('active');
-      tabKmeans.classList.remove('active');
-      if (zonaMapTitle) zonaMapTitle.textContent = 'Visualisasi Zona - HBCDP (Hasil Akhir)';
-      if (zonaSummaryTitle) zonaSummaryTitle.textContent = 'Ringkasan Jumlah Titik per Cluster (HBCDP Hasil Akhir)';
-      renderZonaMap();
-    });
-  }
+  });
 
   function updateZonaSummary() {
     const ds = state.activeDatasetKey ? DATASETS[state.activeDatasetKey] : null;
@@ -734,7 +900,7 @@ if (kpiCluster) {
       return;
     }
 
-    const clusterList = state.zonaMode === 'kmeans' ? ds.clusters.kmeans : ds.clusters.hbcdp;
+    const clusterList = ds.clusters[state.zonaMode];
 
     let rowsHtml = '';
     let total = 0;
@@ -744,7 +910,7 @@ if (kpiCluster) {
   total += (typeof c.count === 'number' ? c.count : 0);
 
   rowsHtml += `
-    <tr>
+    <tr class="clickable-cluster-row" data-cluster-id="${c.id}" title="Klik untuk zoom ke wilayah ${escapeHtml(c.name)}">
       <td>
         <span style="display: inline-flex; align-items: center; gap: 8px;">
           <span style="
@@ -754,10 +920,10 @@ if (kpiCluster) {
             border-radius: 50%;
             background: ${cMeta.color};
           "></span>
-          ${c.name}
+          <strong>${escapeHtml(c.name)}</strong>
         </span>
       </td>
-      <td style="text-align: center;">
+      <td style="text-align: center; font-weight: 600;">
         ${typeof c.count === 'number' ? GeoUtils.formatNumber(c.count) : c.count}
       </td>
     </tr>
@@ -766,6 +932,16 @@ if (kpiCluster) {
 
     tbody.innerHTML = rowsHtml || '<tr><td colspan="2" style="text-align: center; color: #64748b; padding: 20px;">Belum ada data zona</td></tr>';
     if (totalCell) totalCell.textContent = total > 0 ? GeoUtils.formatNumber(total) : '-';
+
+    // Klik baris cluster langsung zoom ke wilayah cluster tersebut di peta (Revisi 29 Oktober)
+    tbody.querySelectorAll('.clickable-cluster-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const clusterId = row.getAttribute('data-cluster-id');
+        if (mapManager && typeof mapManager.zoomToCluster === 'function') {
+          mapManager.zoomToCluster(clusterId, 'map-zona-large');
+        }
+      });
+    });
   }
 
   function renderAnggotaTable() {
@@ -779,17 +955,34 @@ if (kpiCluster) {
       return;
     }
 
-    const clusterKey = state.zonaMode === 'kmeans' ? 'c_init' : 'c_final';
+    const clusterKey = state.zonaMode === 'aktual' ? 'c_actual' : state.zonaMode === 'kmeans' ? 'c_init' : 'c_final';
     const query = state.tableSearchQuery.toLowerCase().trim();
 
-    let filtered = ds.points.filter(pt => {
+    const sourcePoints = state.zonaMode === 'aktual' ? actualPoints(ds) : ds.points;
+
+    let filtered = sourcePoints.filter(pt => {
       if (!query) return true;
-      return (pt.resi && pt.resi.toLowerCase().includes(query)) ||
-             (pt.alamat && pt.alamat.toLowerCase().includes(query)) ||
-             (pt.id && pt.id.toLowerCase().includes(query));
+
+      const clusterId = pt[clusterKey];
+
+      const namaCluster = clusterId != null
+        ? (state.zonaMode === 'aktual'
+            ? pt.petugas || ''
+            : `Cluster ${clusterId}`)
+        : '';
+
+      return [
+        pt.resi,
+        pt.alamat,
+        pt.id,
+        pt.petugas,
+        namaCluster
+      ].some(value =>
+        String(value ?? '').toLowerCase().includes(query)
+      );
     });
 
-    const totalCount = ds.totalPoints || filtered.length;
+    const totalCount = filtered.length;
     const filteredCount = filtered.length;
     const totalPages = Math.ceil(filteredCount / state.tablePageSize) || 1;
 
@@ -807,16 +1000,26 @@ if (kpiCluster) {
       pageItems.forEach((pt, index) => {
         const rowNo = startIdx + index + 1;
         const cId = pt[clusterKey];
-const cMeta = cId != null ? getClusterMetadata(cId) : null;
+const cMeta = cId != null ? { ...getClusterMetadata(cId), name: state.zonaMode === 'aktual' ? pt.petugas : getClusterMetadata(cId).name } : null;
         rowsHtml += `
           <tr>
             <td style="text-align: center;">${rowNo}</td>
-            <td><strong>${pt.resi}</strong> <span style="color: #6b7280; font-size: 11px;">(${pt.id})</span></td>
-            <td>${pt.alamat}</td>
+            <td>
+            <button
+            type="button"
+            class="clickable-resi resi-map-link"
+            data-point-id="${escapeHtml(pt.id)}"
+            title="Klik untuk melihat lokasi pengiriman"
+          >
+            ${escapeHtml(pt.resi)}
+          </button>
+
+          </td>
+            <td>${escapeHtml(pt.alamat)}</td>
             <td style="text-align: center;">
   ${cMeta ? `
     <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 11.5px; background: ${cMeta.fillColor}; color: ${cMeta.color};">
-      ${cMeta.name}
+      ${escapeHtml(cMeta.name)}
     </span>
   ` : '-'}
 </td>
@@ -824,6 +1027,34 @@ const cMeta = cId != null ? getClusterMetadata(cId) : null;
         `;
       });
       tableBody.innerHTML = rowsHtml;
+      // Klik No. Resi untuk zoom ke titik pengiriman
+      tableBody.querySelectorAll('.clickable-resi').forEach(button => {
+        button.addEventListener('click', () => {
+          const pointId = button.dataset.pointId;
+
+          const selectedPoint = ds.points.find(
+            pt => String(pt.id) === String(pointId)
+          );
+
+          if (!selectedPoint) {
+            showToast('Titik pengiriman tidak ditemukan.', 'error');
+            return;
+          }
+
+          if (mapManager && typeof mapManager.zoomToPoint === 'function') {
+            const success = mapManager.zoomToPoint(
+            selectedPoint.id,
+            'map-zona-large'
+          );
+
+            if (success === false) {
+              showToast('Titik belum tersedia pada peta.', 'error');
+            }
+          } else {
+            showToast('Fitur zoom titik belum tersedia pada peta.', 'error');
+          }
+        });
+      });
     }
 
     if (paginationInfo) {
@@ -879,59 +1110,22 @@ const cMeta = cId != null ? getClusterMetadata(cId) : null;
   // 6. Evaluasi Page Handlers
   // ------------------------------------------------------------------------
   function updateEvaluasiView() {
-    const ds = state.activeDatasetKey ? DATASETS[state.activeDatasetKey] : null;
-
-    const kmSil = document.getElementById('card-eval-km-silhouette');
-    const kmDbi = document.getElementById('card-eval-km-dbi');
-    const kmZ1 = document.getElementById('card-eval-km-z1');
-    const kmZ2 = document.getElementById('card-eval-km-z2');
-
-    const hbSil = document.getElementById('card-eval-hb-silhouette');
-    const hbDbi = document.getElementById('card-eval-hb-dbi');
-    const hbZ1 = document.getElementById('card-eval-hb-z1');
-    const hbZ2 = document.getElementById('card-eval-hb-z2');
-
-    const tbodySteps = document.getElementById('table-eval-steps-body');
-
-    if (!ds || !ds.evaluation) {
-      [kmSil, kmDbi, kmZ1, kmZ2, hbSil, hbDbi, hbZ1, hbZ2].forEach(el => {
-        if (el) el.textContent = '-';
-      });
-      if (tbodySteps) {
-        tbodySteps.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Belum ada riwayat iterasi penyeimbangan beban kurir</td></tr>';
-      }
-      return;
-    }
-
-    if (kmSil) kmSil.textContent = (ds.evaluation.kmeans && ds.evaluation.kmeans.silhouette != null) ? ds.evaluation.kmeans.silhouette.toFixed(3) : '-';
-    if (kmDbi) kmDbi.textContent = (ds.evaluation.kmeans && ds.evaluation.kmeans.dbi != null) ? ds.evaluation.kmeans.dbi.toFixed(3) : '-';
-    if (kmZ1) kmZ1.textContent = (ds.evaluation.kmeans && ds.evaluation.kmeans.z1 != null) ? GeoUtils.formatNumber(ds.evaluation.kmeans.z1, 2) : '-';
-    if (kmZ2) kmZ2.textContent = (ds.evaluation.kmeans && ds.evaluation.kmeans.z2 != null) ? `${GeoUtils.formatNumber(ds.evaluation.kmeans.z2, 2)} m` : '-';
-
-    if (tbodySteps) {
-      if (ds.evaluation.steps && ds.evaluation.steps.length > 0) {
-        let rowsHtml = '';
-        ds.evaluation.steps.forEach(step => {
-          rowsHtml += `
-            <tr>
-              <td><strong>${step.step}</strong></td>
-              <td style="text-align: center; font-family: monospace;">${step.cardinality}</td>
-              <td style="text-align: center;">${step.z1}</td>
-              <td style="text-align: center;">${step.z2}</td>
-              <td style="text-align: center;">${step.reassigned}</td>
-            </tr>
-          `;
-        });
-        tbodySteps.innerHTML = rowsHtml;
-      } else {
-        tbodySteps.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Belum ada riwayat iterasi penyeimbangan beban kurir</td></tr>';
-      }
-    }
-
-    if (hbSil) hbSil.textContent = (ds.evaluation.hbcdp && ds.evaluation.hbcdp.silhouette != null) ? ds.evaluation.hbcdp.silhouette.toFixed(3) : '-';
-    if (hbDbi) hbDbi.textContent = (ds.evaluation.hbcdp && ds.evaluation.hbcdp.dbi != null) ? ds.evaluation.hbcdp.dbi.toFixed(3) : '-';
-    if (hbZ1) hbZ1.textContent = (ds.evaluation.hbcdp && ds.evaluation.hbcdp.z1 != null) ? GeoUtils.formatNumber(ds.evaluation.hbcdp.z1, 2) : '-';
-    if (hbZ2) hbZ2.textContent = (ds.evaluation.hbcdp && ds.evaluation.hbcdp.z2 != null) ? `${GeoUtils.formatNumber(ds.evaluation.hbcdp.z2, 2)} m` : '-';
+    const ds = DATASETS[state.activeDatasetKey] || null;
+    document.getElementById('card-eval-n').textContent = ds ? GeoUtils.formatNumber(ds.totalPoints) : 'N/A';
+    document.getElementById('card-eval-k').textContent = ds?.k ?? 'N/A';
+    document.getElementById('card-eval-actual-couriers').textContent = ds?.aktual?.jumlah_kurir_aktual ?? 'N/A';
+    document.getElementById('card-eval-waktu-komputasi').textContent = ds?.waktu_komputasi_str || 'N/A';
+    document.getElementById('evaluation-comparison-scope').textContent = comparisonScope(ds);
+    document.getElementById('evaluation-actual-reason').textContent = ds?.aktual?.alasan_na || (!ds?.aktual ? 'Baseline aktual belum dihitung.' : '');
+    document.getElementById('evaluation-algorithm-reason').textContent = algorithmMetricReasons(ds);
+    fillMetricElements('card-eval-actual', { silhouette: ds?.aktual?.silhouette_score, dbi: ds?.aktual?.dbi, z1: ds?.aktual?.z1 });
+    fillMetricElements('card-eval-km', comparisonMetrics(ds, 'kmeans'));
+    fillMetricElements('card-eval-hb', comparisonMetrics(ds, 'hbcdp'));
+    const tbody = document.getElementById('table-eval-steps-body');
+    const steps = ds?.evaluation?.steps || [];
+    if (tbody) tbody.innerHTML = steps.length ? steps.map(step =>
+      `<tr><td><strong>${escapeHtml(step.step)}</strong></td><td style="text-align:center;font-family:monospace">${escapeHtml(step.cardinality)}</td><td>${escapeHtml(step.z1 ?? 'N/A')}</td><td>${escapeHtml(step.z2 ?? 'N/A')}</td><td>${escapeHtml(step.reassigned ?? 'N/A')}</td></tr>`
+    ).join('') : '<tr><td colspan="5" class="empty-state">Belum ada proses penyeimbangan jumlah pengiriman antar-kurir.</td></tr>';
   }
 
   // ------------------------------------------------------------------------
@@ -940,6 +1134,7 @@ const cMeta = cId != null ? getClusterMetadata(cId) : null;
   if (processSelector) {
     processSelector.addEventListener('change', async (e) => {
       const selectedVal = e.target.value;
+// Pemilihan dataset di Dashboard tidak mereset sesi Upload Data.
       if (selectedVal === 'none') {
         state.activeDatasetKey = null;
         state.currentDbDatasetId = null;
@@ -1008,6 +1203,110 @@ const cMeta = cId != null ? getClusterMetadata(cId) : null;
     });
   }
 
+function escapeHtml(text) {
+  if (text == null) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+window.togglePrepDrawer = function(type) {
+  const drawer = document.getElementById(`drawer-${type}`);
+  const chevron = document.getElementById(`chevron-${type}`);
+  if (!drawer) return;
+  const isHidden = drawer.style.display === 'none';
+  drawer.style.display = isHidden ? 'block' : 'none';
+  if (chevron) {
+    if (isHidden) {
+      chevron.classList.add('rotated');
+    } else {
+      chevron.classList.remove('rotated');
+    }
+  }
+};
+
+// Event listener dropdown rincian preprocessing
+[
+  'data-kosong',
+  'resi-duplikat'
+].forEach(type => {
+  const header = document.getElementById(`header-${type}`);
+
+  if (header) {
+    header.style.cursor = 'pointer';
+
+    header.addEventListener('click', () => {
+      window.togglePrepDrawer(type);
+    });
+  }
+});
+
+window.toggleGeocodingGagalDrawer = function() {
+  const drawer = document.getElementById('drawer-geocoding-gagal');
+  const chevron = document.getElementById('chevron-geocoding-gagal');
+  if (!drawer) return;
+  const isHidden = drawer.style.display === 'none';
+  drawer.style.display = isHidden ? 'block' : 'none';
+  if (chevron) {
+    if (isHidden) {
+      chevron.classList.add('rotated');
+    } else {
+      chevron.classList.remove('rotated');
+    }
+  }
+};
+
+
+function ensurePreprocessingProgressLabel() {
+  const progressFill = document.getElementById(
+    'preprocessing-progress-fill'
+  );
+
+  if (!progressFill || !progressFill.parentElement) return;
+
+  // Warna progress bar sama dengan Geocoding
+  progressFill.style.background =
+    'linear-gradient(90deg, #1c2d5a 0%, #ef4123 100%)';
+
+  let info = document.getElementById(
+    'preprocessing-progress-info'
+  );
+
+  if (!info) {
+    info = document.createElement('div');
+    info.id = 'preprocessing-progress-info';
+
+    info.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+      font-size: 13px;
+      color: #64748b;
+    `;
+
+    info.innerHTML = `
+      <span id="preprocessing-progress-label">
+        Belum ada proses preprocessing
+      </span>
+      <strong
+        id="preprocessing-progress-percent"
+        style="color: #ef4123; font-weight: 700; white-space: nowrap;"
+      >0%</strong>
+    `;
+
+    progressFill.parentElement.insertAdjacentElement(
+      'afterend',
+      info
+    );
+  }
+}
+
+
 // Menampilkan ringkasan hasil preprocessing
 function tampilkanHasilPreprocessing(data) {
   const card = document.getElementById('preprocessing-card');
@@ -1017,46 +1316,122 @@ function tampilkanHasilPreprocessing(data) {
   const summary = document.getElementById('preprocessing-summary');
   const status = document.getElementById('preprocessing-status');
   const progressFill = document.getElementById('preprocessing-progress-fill');
+  const detailsContainer = document.getElementById('preprocessing-details-container');
 
   if (!card || !data) return;
 
   const awal = Number(data.total_awal ?? 0);
   const eliminasi = Number(data.total_eliminasi ?? 0);
-  const valid = Number(data.jumlah_data ?? 0);
+  const valid = Number(data.total_valid ?? data.jumlah_data ?? 0);
 
   if (totalAwal) totalAwal.textContent = GeoUtils.formatNumber(awal);
   if (totalEliminasi) totalEliminasi.textContent = GeoUtils.formatNumber(eliminasi);
   if (jumlahValid) jumlahValid.textContent = GeoUtils.formatNumber(valid);
 
-  if (summary) {
-  if (valid === 0) {
-    summary.textContent =
-      `Seluruh ${GeoUtils.formatNumber(awal)} baris data tereliminasi ` +
-      `pada tahap preprocessing. Tidak ada data yang dapat ` +
-      `dilanjutkan ke proses geocoding.`;
-  } else {
-    summary.textContent =
-      `${GeoUtils.formatNumber(valid)} dari ${GeoUtils.formatNumber(awal)} baris data ` +
-      `memenuhi kriteria preprocessing dan dilanjutkan ke tahap geocoding.`;
+  if (status) {
+    status.textContent = valid === 0 ? 'Selesai — tidak ada data valid' : '✓ Selesai';
+    status.style.color = valid === 0 ? '#d97706' : '#16a34a';
   }
-}
 
-if (status) {
-  status.textContent =
-    valid === 0 ? 'Selesai — tidak ada data valid' : '✓ Selesai';
+  
+  // Semua baris telah diperiksa, termasuk yang tereliminasi
+  updatePreprocessingProgress({
+    total: awal,
+    processed: awal,
+    percentage: 100,
+    status: 'COMPLETED'
+  });
 
-  status.style.color =
-    valid === 0 ? '#d97706' : '#16a34a';
-}
+  if (status && valid === 0) {
+    status.textContent = 'Selesai — tidak ada data valid';
+    status.style.color = '#d97706';
+  }
 
-  if (progressFill) {
-    progressFill.style.width = '100%';
+
+  // Render rincian jika ada
+  const prep = data.preprocessing || (data.rincian ? data : null);
+  if (prep && prep.rincian && detailsContainer) {
+    const rincian = prep.rincian;
+
+const hasPetugas = prep.has_petugas === true;
+
+[
+  'data-kosong',
+  'resi-duplikat'
+].forEach(type => {
+  const tbody = document.getElementById(`table-${type}-body`);
+  const headerRow = tbody?.closest('table')?.querySelector('thead tr');
+
+  if (!headerRow) return;
+
+  headerRow.querySelectorAll('.prep-petugas-header').forEach(el => el.remove());
+
+  if (hasPetugas) {
+    const th = document.createElement('th');
+    th.className = 'prep-petugas-header';
+    th.textContent = 'Petugas';
+
+    headerRow.children[2]?.insertAdjacentElement('afterend', th);
+  }
+});
+
+
+    // 1. Data Kosong
+    const countKosong = document.getElementById('count-data-kosong');
+    const tbodyKosong = document.getElementById('table-data-kosong-body');
+    if (rincian.data_kosong) {
+      if (countKosong) countKosong.textContent = `${rincian.data_kosong.count} data`;
+      if (tbodyKosong) {
+        let h = '';
+        (rincian.data_kosong.items || []).forEach((item, idx) => {
+          h += `<tr><td style="text-align: center;">${idx + 1}</td><td style="text-align: center;">${item.baris}</td><td>${escapeHtml(item.resi)}</td>${hasPetugas ? `<td>${escapeHtml(item.petugas || '-')}</td>` : ''}<td>${escapeHtml(item.alamat)}</td><td><span style="color: #dc2626;">${escapeHtml(item.keterangan || '')}</span></td></tr>`;
+        });
+        tbodyKosong.innerHTML = h || `<tr><td colspan="${hasPetugas ? 6 : 5}" style="text-align: center; color: #64748b; padding: 12px;">Tidak ada data kosong</td></tr>`;
+      }
+    }
+
+    // 2. Resi Duplikat
+    const countDuplikat = document.getElementById('count-resi-duplikat');
+    const tbodyDuplikat = document.getElementById('table-resi-duplikat-body');
+    if (rincian.resi_duplikat) {
+      if (countDuplikat) countDuplikat.textContent = `${rincian.resi_duplikat.count} data`;
+      if (tbodyDuplikat) {
+        let h = '';
+        (rincian.resi_duplikat.items || []).forEach((item, idx) => {
+          h += `<tr><td style="text-align: center;">${idx + 1}</td><td style="text-align: center;">${item.baris}</td><td>${escapeHtml(item.resi)}</td>${hasPetugas ? `<td>${escapeHtml(item.petugas || '-')}</td>` : ''}<td>${escapeHtml(item.alamat)}</td><td><span style="color: #dc2626;">${escapeHtml(item.keterangan || '')}</span></td></tr>`;
+        });
+        tbodyDuplikat.innerHTML = h || `<tr><td colspan="${hasPetugas ? 6 : 5}" style="text-align: center; color: #64748b; padding: 12px;">Tidak ada resi duplikat</td></tr>`;
+      }
+    }
+
+    // 3. Normalisasi Alamat
+    const normText = document.getElementById('preprocessing-normalisasi-text');
+    if (normText) {
+      normText.textContent = `Alamat pada ${GeoUtils.formatNumber(valid)} data valid distandarisasi untuk penulisan Jalan, Gang, dan Nomor serta dirapikan spasinya sebelum geocoding.`;
+    }
+
+    // Footer
+    const footerText = document.getElementById('preprocessing-footer-text');
+    if (footerText) {
+      footerText.textContent = `${GeoUtils.formatNumber(valid)} dari ${GeoUtils.formatNumber(awal)} data siap dilanjutkan.`;
+    }
+
+    detailsContainer.style.display = 'block';
+    if (summary) summary.style.display = 'none';
+  } else {
+    if (summary) {
+      summary.style.display = 'block';
+      summary.textContent = valid === 0
+        ? `Seluruh ${GeoUtils.formatNumber(awal)} baris data tereliminasi pada tahap preprocessing.`
+        : `${GeoUtils.formatNumber(valid)} dari ${GeoUtils.formatNumber(awal)} baris data memenuhi kriteria preprocessing dan dilanjutkan ke tahap geocoding.`;
+    }
+    if (detailsContainer) detailsContainer.style.display = 'none';
   }
 
   card.style.display = 'block';
 }
 
-  // Mengembalikan tampilan preprocessing ke kondisi awal
+// Mengembalikan tampilan preprocessing ke kondisi awal
 function resetPreprocessing() {
   const totalAwal = document.getElementById('preprocessing-total-awal');
   const totalEliminasi = document.getElementById('preprocessing-total-eliminasi');
@@ -1064,6 +1439,7 @@ function resetPreprocessing() {
   const summary = document.getElementById('preprocessing-summary');
   const status = document.getElementById('preprocessing-status');
   const progressFill = document.getElementById('preprocessing-progress-fill');
+  const detailsContainer = document.getElementById('preprocessing-details-container');
 
   // Reset jumlah data
   if (totalAwal) totalAwal.textContent = '0';
@@ -1072,7 +1448,12 @@ function resetPreprocessing() {
 
   // Reset keterangan
   if (summary) {
-    summary.textContent = 'Belum ada proses preprocessing';
+    summary.textContent = 'Belum ada hasil preprocessing.';
+    summary.style.display = 'block';
+  }
+
+  if (detailsContainer) {
+    detailsContainer.style.display = 'none';
   }
 
   // Reset status
@@ -1081,22 +1462,302 @@ function resetPreprocessing() {
     status.style.color = '#64748b';
   }
 
+  
   // Kosongkan progress bar
   if (progressFill) {
     progressFill.style.width = '0%';
   }
-}
 
-  function resetGeocodingProgress() {
-    state.geocodingProgress = 0;
+  ensurePreprocessingProgressLabel();
 
-    if (progressBarFill) progressBarFill.style.width = '0%';
-    if (progressPercentText) progressPercentText.textContent = '0%';
-    if (progressTextLabel) {
-      progressTextLabel.textContent = 'Belum ada proses geocoding';
-    }
+  const progressLabel = document.getElementById(
+    'preprocessing-progress-label'
+  );
+  const progressPercent = document.getElementById(
+    'preprocessing-progress-percent'
+  );
+
+  if (progressLabel) {
+    progressLabel.textContent = 'Belum ada proses preprocessing';
   }
 
+  if (progressPercent) {
+    progressPercent.textContent = '0%';
+  }
+}
+
+
+
+function updateGeocodingDisplay(geoSummary) {
+  if (!geoSummary) return;
+
+  const kpiDiproses = document.getElementById('geocoding-kpi-diproses');
+  const kpiBerhasil = document.getElementById('geocoding-kpi-berhasil');
+  const kpiGagal = document.getElementById('geocoding-kpi-gagal');
+  const container = document.getElementById('geocoding-gagal-container');
+  const badge = document.getElementById('geocoding-gagal-badge');
+  const tbody = document.getElementById('table-geocoding-gagal-body');
+
+  const total = Number(
+    geoSummary.total ?? geoSummary.total_points ?? geoSummary.total_diproses ?? 0
+  );
+  const berhasil = Number(
+    geoSummary.berhasil ?? geoSummary.successful_points ?? 0
+  );
+  const gagal = Number(
+    geoSummary.gagal ?? geoSummary.failed_points ?? 0
+  );
+
+  if (kpiDiproses) kpiDiproses.textContent = GeoUtils.formatNumber(total);
+  if (kpiBerhasil) kpiBerhasil.textContent = GeoUtils.formatNumber(berhasil);
+  if (kpiGagal) kpiGagal.textContent = GeoUtils.formatNumber(gagal);
+
+  const items = geoSummary.gagal_items || [];
+
+  if (!container || !badge || !tbody) return;
+
+  // Petugas opsional: mengikuti metadata dari backend.
+  const hasPetugas = geoSummary.has_petugas === true;
+
+// Tambahkan atau hapus header Petugas secara dinamis.
+const table = tbody.closest('table');
+const headerRow = table?.querySelector('thead tr');
+
+if (headerRow) {
+  headerRow.querySelectorAll('.geo-petugas-header')
+    .forEach(el => el.remove());
+
+  if (hasPetugas) {
+    const th = document.createElement('th');
+    th.className = 'geo-petugas-header';
+    th.textContent = 'Petugas';
+
+    // Setelah No. Resi, sebelum Alamat.
+    headerRow.children[1]?.insertAdjacentElement('afterend', th);
+  }
+
+  // Atur lebar kolom secara proporsional.
+  const widths = hasPetugas
+    ? ['5%', '12%', '15%', '43%', '25%']
+    : ['5%', '15%', '55%', '25%'];
+
+  if (table) {
+    table.style.width = '100%';
+    table.style.tableLayout = 'fixed';
+  }
+
+  Array.from(headerRow.children).forEach((th, index) => {
+    th.style.width = widths[index];
+  });
+}
+
+  if (gagal > 0 && items.length > 0) {
+    badge.textContent = `${items.length} data`;
+
+    let rowsHtml = '';
+
+    items.forEach((it, idx) => {
+      rowsHtml += `
+        <tr>
+          <td style="text-align: center; color: #64748b;">
+            ${idx + 1}
+          </td>
+          <td>
+            ${escapeHtml(it.resi ?? it.nosi ?? '-')}
+          </td>
+          ${hasPetugas ? `
+            <td>
+              ${escapeHtml(it.petugas || '-')}
+            </td>
+          ` : ''}
+          <td>
+             ${escapeHtml(it.alamat)}
+          </td>
+          <td>
+            <span style="color: #dc2626; font-weight: 600;">
+              ${escapeHtml(it.keterangan || 'Lokasi tidak ditemukan')}
+            </span>
+          </td>
+        </tr>
+      `;
+    });
+
+    tbody.innerHTML = rowsHtml;
+    container.style.display = 'block';
+  } else {
+    container.style.display = 'none';
+    tbody.innerHTML = '';
+  }
+}
+
+
+function resetGeocodingProgress() {
+  state.geocodingProgress = 0;
+  updateActualPanel(null);
+
+  if (progressBarFill) progressBarFill.style.width = '0%';
+  if (progressPercentText) progressPercentText.textContent = '0%';
+  if (progressTextLabel) {
+    progressTextLabel.textContent = 'Belum ada proses geocoding';
+  }
+
+  const kpiDiproses = document.getElementById('geocoding-kpi-diproses');
+  const kpiBerhasil = document.getElementById('geocoding-kpi-berhasil');
+  const kpiGagal = document.getElementById('geocoding-kpi-gagal');
+  const container = document.getElementById('geocoding-gagal-container');
+  if (kpiDiproses) kpiDiproses.textContent = '0';
+  if (kpiBerhasil) kpiBerhasil.textContent = '0';
+  if (kpiGagal) kpiGagal.textContent = '0';
+  if (container) container.style.display = 'none';
+}
+
+function resetUploadPage() {
+  // Jangan reset saat proses masih berjalan
+  if (
+    state.uploadStatus === 'uploading' ||
+    state.uploadStatus === 'geocoding' ||
+    state.isClustering
+  ) {
+    return;
+  }
+
+  // Reset file yang dipilih
+  if (fileInput) fileInput.value = '';
+  if (selectedFileCard) {
+    selectedFileCard.style.display = 'none';
+  }
+
+  // Reset tampilan preprocessing dan geocoding
+  resetPreprocessing();
+  resetGeocodingProgress();
+
+  // Reset status geocoding
+  const geoStatus = document.getElementById('geocoding-status');
+  if (geoStatus) {
+    geoStatus.textContent = 'Belum diproses';
+    geoStatus.style.color = '#64748b';
+  }
+
+  // Reset kesiapan clustering pada sesi upload
+  resetUploadReadiness();
+}
+  
+
+function updatePreprocessingProgress(progress) {
+  const total = Math.max(0, Number(progress.total) || 0);
+
+  const processed = Math.min(
+    total,
+    Math.max(0, Number(progress.processed) || 0)
+  );
+
+  const percentage = total > 0
+    ? Math.round((processed / total) * 100)
+    : 0;
+
+  const currentStatus = progress.status || 'NOT_STARTED';
+
+  const card = document.getElementById(
+    'preprocessing-card'
+  );
+
+  const status = document.getElementById(
+    'preprocessing-status'
+  );
+
+  const progressFill = document.getElementById(
+    'preprocessing-progress-fill'
+  );
+
+  const summary = document.getElementById(
+    'preprocessing-summary'
+  );
+
+  ensurePreprocessingProgressLabel();
+
+  if (card) {
+    card.style.display = 'block';
+  }
+
+  if (progressFill) {
+    progressFill.style.width = `${percentage}%`;
+  }
+
+  const label = document.getElementById(
+    'preprocessing-progress-label'
+  );
+
+  const percentText = document.getElementById(
+    'preprocessing-progress-percent'
+  );
+
+  if (label) {
+    label.textContent = total > 0
+      ? `${GeoUtils.formatNumber(processed)} dari ${GeoUtils.formatNumber(total)} data diperiksa`
+      : 'Menunggu pemeriksaan dataset...';
+  }
+
+  if (percentText) {
+    percentText.textContent = `${percentage}%`;
+  }
+
+  if (status) {
+    const statusLabels = {
+      VALIDATING: 'Memvalidasi dataset...',
+      PROCESSING: 'Sedang diproses...',
+      SAVING: 'Menyimpan hasil preprocessing...',
+      COMPLETED: '✓ Selesai',
+      FAILED: 'Gagal'
+    };
+
+    status.textContent =
+      statusLabels[currentStatus] || 'Mengunggah dataset...';
+
+    status.style.color =
+      currentStatus === 'COMPLETED' ? '#16a34a' :
+      currentStatus === 'FAILED' ? '#dc2626' :
+      '#2563eb';
+  }
+
+  if (summary && currentStatus !== 'COMPLETED') {
+    summary.style.display = 'block';
+
+    summary.textContent = total > 0
+      ? `${GeoUtils.formatNumber(processed)} dari ${GeoUtils.formatNumber(total)} baris dataset telah diperiksa.`
+      : 'Menunggu server memulai preprocessing...';
+  }
+}
+
+
+async function pollPreprocessingProgress(uploadId, isActive) {
+  while (isActive()) {
+    try {
+      const response = await fetch(
+        `/api/preprocessing/progress/${encodeURIComponent(uploadId)}`,
+        { cache: 'no-store' }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+
+        if (
+        isActive() &&
+        result.success &&
+        result.data &&
+        result.data.status !== 'NOT_STARTED'
+      ) {
+        updatePreprocessingProgress(result.data);
+      }
+      }
+    } catch (error) {
+      console.warn('Gagal membaca progress preprocessing:', error);
+    }
+
+    if (isActive()) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+}
 
   async function handleFileSelected(file) {
         // Cegah upload baru saat proses sebelumnya berlangsung
@@ -1112,25 +1773,27 @@ function resetPreprocessing() {
       if (fileInput) fileInput.value = '';
       return;
     }
-    const validExtensions = ['.csv', '.xlsx', '.xls'];
+    const validExtensions = ['.csv', '.xlsx'];
     const fileName = file.name;
     const fileExt = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
 
 if (!validExtensions.includes(fileExt)) {
-  showToast('Format file tidak didukung. Harap gunakan format .xlsx, .xls, atau .csv', 'error');
+  showToast(
+    'Format file tidak didukung. Harap gunakan format .csv atau .xlsx',
+    'error'
+  );
   if (fileInput) fileInput.value = '';
   return;
 }
+
+// Reset hanya setelah file baru lolos validasi
+resetUploadPage();
 
     // Dataset baru belum siap untuk clustering
 state.uploadStatus = 'uploading';
 state.readyDatasetId = null;
 state.geocodedPointCount = 0;
 updateClusteringButtonState();
-
-// Reset tampilan proses dataset sebelumnya
-resetPreprocessing();
-resetGeocodingProgress();
 
 const geocodingStatus = document.getElementById('geocoding-status');
 
@@ -1143,18 +1806,37 @@ if (geocodingStatus) {
     if (selectedFileMeta) selectedFileMeta.textContent = `Memproses • ${sizeMb.replace('.', ',')} MB`;
     if (selectedFileCard) selectedFileCard.style.display = 'block';
 
-    if (isServerMode) {
-      showToast(`Mengunggah ${fileName} ke server Flask...`);
-      const formData = new FormData();
-      formData.append('file', file);
+    
+  if (isServerMode) {
+    showToast(`Mengunggah ${fileName} ke server Flask...`);
 
-      try {
-        const resp = await fetch('/api/upload', {
+    const uploadId = crypto.randomUUID();
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_id', uploadId);
+
+    let preprocessingPollingActive = true;
+
+    const preprocessingPollingPromise = pollPreprocessingProgress(
+      uploadId,
+      () => preprocessingPollingActive
+    );
+
+    try {
+      const resp = await fetch('/api/upload', {
+
           method: 'POST',
           body: formData
         });
+        
         const res = await resp.json();
+
+        preprocessingPollingActive = false;
+        await preprocessingPollingPromise;
+
         if (res.success) {
+
 
   // Preprocessing selesai, tetapi seluruh data tereliminasi.
   if (res.preprocessing_only === true) {
@@ -1247,9 +1929,12 @@ await syncDatasetsFromBackend();
 
         resetGeocodingProgress();
         if (selectedFileMeta) selectedFileMeta.textContent = 'Upload gagal';
-        showToast('Gagal mengunggah file ke server.', 'error');
+      showToast('Gagal mengunggah file ke server.', 'error');
+      } finally {
+        preprocessingPollingActive = false;
+        await preprocessingPollingPromise;
       }
-    } else {
+      } else {
       // Website dibuka tanpa server Flask
       state.uploadStatus = 'error';
       state.readyDatasetId = null;
@@ -1384,14 +2069,42 @@ async function performServerGeocoding(datasetId, totalAddresses) {
       throw new Error(result.error || 'Kesalahan server');
     }
 
-const total = result.data.total_points;
-const berhasil = result.data.successful_points;
-const gagal = result.data.failed_points;
 
-// Simpan jumlah titik yang berhasil di-geocoding
-state.geocodedPointCount = Number(berhasil) || 0;
 
-updateProgress(total, total, 100);
+    // Ambil hasil final geocoding dari database
+    const detailResponse = await fetch(
+      `/api/dataset/${datasetId}`,
+      { cache: 'no-store' }
+    );
+
+    if (!detailResponse.ok) {
+      throw new Error('Gagal mengambil hasil geocoding dari database.');
+    }
+
+    const detailResult = await detailResponse.json();
+
+    if (!detailResult.success || !detailResult.data?.geocoding_summary) {
+      throw new Error('Ringkasan geocoding tidak tersedia.');
+    }
+
+    const summary = detailResult.data.geocoding_summary;
+
+    const total = Number(summary.total ?? 0);
+    const berhasil = Number(summary.berhasil ?? 0);
+    const gagal = Number(summary.gagal ?? 0);
+
+    if (
+      !Number.isFinite(total) ||
+      !Number.isFinite(berhasil) ||
+      !Number.isFinite(gagal) ||
+      total !== berhasil + gagal
+    ) {
+      throw new Error('Ringkasan hasil geocoding tidak konsisten.');
+    }
+
+    state.geocodedPointCount = berhasil;
+
+    updateProgress(total, total, 100);
 
     if (statusElement) {
       statusElement.textContent = '✓ Selesai';
@@ -1400,11 +2113,21 @@ updateProgress(total, total, 100);
 
     if (progressTextLabel) {
       progressTextLabel.textContent =
-        `${GeoUtils.formatNumber(total)} alamat diperiksa (${berhasil} berhasil, ${gagal} gagal)`;
+        `${GeoUtils.formatNumber(total)} alamat diperiksa ` +
+        `(${berhasil} berhasil, ${gagal} gagal)`;
     }
 
-    showToast(`Geocoding selesai: ${berhasil} berhasil, ${gagal} gagal.`);
+    updateGeocodingDisplay(summary);
+    updateActualPanel(detailResult.data.aktual || null);
+
+    await loadDatasetFromDb(datasetId);
+
+    showToast(
+      `Geocoding selesai: ${berhasil} berhasil, ${gagal} gagal.`
+    );
+
     return true;
+
 
   } catch (error) {
     pollingActive = false;
@@ -1471,7 +2194,7 @@ if (btnStartClustering) {
       kVal >= state.geocodedPointCount
     ) {
       showToast(
-        `Jumlah Kurir (K) harus bilangan bulat antara 2 dan ${state.geocodedPointCount - 1}.`,
+        `Jumlah Cluster (K) harus bilangan bulat antara 2 dan ${state.geocodedPointCount - 1}.`,
         'error'
       );
       return;
@@ -1514,19 +2237,20 @@ if (btnStartClustering) {
         throw new Error(res.error || 'Proses clustering gagal.');
       }
 
-      showToast(
-        'Clustering berhasil diselesaikan dan disimpan ke PostgreSQL!'
-      );
-
       // Perbarui daftar dataset dan hasil clustering
       await syncDatasetsFromBackend();
-      await loadDatasetFromDb(datasetId);
+
+      // Tandai clustering berhasil untuk dataset sesi ini
+      state.completedClusteringDatasetId = datasetId;
 
       if (processSelector) {
         processSelector.value = `db_${datasetId}`;
       }
 
-      switchView('zona');
+      // Tetap di halaman Upload Data
+      showToast(
+        'Clustering berhasil diselesaikan dan disimpan ke PostgreSQL!'
+      );
 
     } catch (error) {
       console.error('Clustering gagal:', error);
@@ -1582,12 +2306,12 @@ function resetClusteringBtn() {
         window.location.href = '/api/download/template/csv';
       } else {
         const csvContent =
-          'No.,Nosi,Tgl Antaran Pertama,Alamat,Kota\n' +
-          '1,nosi_1,2025-08-01,Jl. Contoh No. 1,Malang\n' +
-          '2,nosi_2,2025-08-01,Jl. Contoh No. 2,Malang\n' +
-          '3,nosi_3,2025-08-01,Jl. Contoh No. 3,Malang\n' +
-          '4,nosi_4,2025-08-01,Jl. Contoh No. 4,Malang\n' +
-          '5,nosi_5,2025-08-01,Jl. Contoh No. 5,Malang\n';
+          'No.,Nosi,Tgl Antaran Pertama,Alamat,Kota,Petugas\n' +
+          '1,nosi_1,01/08/2025,Jl. Contoh No. 1,Malang,Kurir A\n' +
+          '2,nosi_2,01/08/2025,Jl. Contoh No. 2,Malang,Kurir B\n' +
+          '3,nosi_3,01/08/2025,Jl. Contoh No. 3,Malang,Kurir A\n' +
+          '4,nosi_4,01/08/2025,Jl. Contoh No. 4,Malang,Kurir B\n' +
+          '5,nosi_5,01/08/2025,Jl. Contoh No. 5,Malang,\n';
         downloadBlob(csvContent, 'Template_Dataset_GeoKurir.csv', 'text/csv;charset=utf-8;');
       }
       showToast('Template CSV berhasil diunduh.');
@@ -1600,15 +2324,15 @@ function resetClusteringBtn() {
         window.location.href = '/api/download/template/excel';
       } else if (typeof XLSX !== 'undefined') {
         const wsData = [
-          ['No.', 'Nosi', 'Tgl Antaran Pertama', 'Alamat', 'Kota'],
-          [1, 'nosi_1', '2025-08-01', 'Jl. Contoh No. 1', 'Malang'],
-          [2, 'nosi_2', '2025-08-01', 'Jl. Contoh No. 2', 'Malang'],
-          [3, 'nosi_3', '2025-08-01', 'Jl. Contoh No. 3', 'Malang'],
-          [4, 'nosi_4', '2025-08-01', 'Jl. Contoh No. 4', 'Malang'],
-          [5, 'nosi_5', '2025-08-01', 'Jl. Contoh No. 5', 'Malang']
+          ['No.', 'Nosi', 'Tgl Antaran Pertama', 'Alamat', 'Kota', 'Petugas'],
+          [1, 'nosi_1', '01/08/2025', 'Jl. Contoh No. 1', 'Malang', 'Kurir A'],
+          [2, 'nosi_2', '01/08/2025', 'Jl. Contoh No. 2', 'Malang', 'Kurir B'],
+          [3, 'nosi_3', '01/08/2025', 'Jl. Contoh No. 3', 'Malang', 'Kurir A'],
+          [4, 'nosi_4', '01/08/2025', 'Jl. Contoh No. 4', 'Malang', 'Kurir B'],
+          [5, 'nosi_5', '01/08/2025', 'Jl. Contoh No. 5', 'Malang', '']
         ];
         const ws = XLSX.utils.aoa_to_sheet(wsData);
-        ws['!cols'] = [{ wch: 6 }, { wch: 14 }, { wch: 22 }, { wch: 35 }, { wch: 15 }];
+        ws['!cols'] = [{ wch: 6 }, { wch: 14 }, { wch: 22 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Template Pengiriman');
         XLSX.writeFile(wb, 'Template_Dataset_GeoKurir.xlsx');
@@ -1629,9 +2353,10 @@ function resetClusteringBtn() {
       if (isServerMode && state.currentDbDatasetId) {
         window.location.href = `/api/download/export/${state.currentDbDatasetId}`;
       } else if (ds && ds.points) {
-        let csvContent = 'No,Nosi,Alamat,Kecamatan,Latitude,Longitude,Cluster_KMeans_Awal,Cluster_HBCDP_Akhir,Status\n';
+        const csvCell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+        let csvContent = 'No,Nosi,Alamat,Kecamatan,Latitude,Longitude,Petugas Aktual,Cluster_KMeans_Awal,Cluster_HBCDP_Akhir,Status\n';
         ds.points.forEach((pt, idx) => {
-          csvContent += `${idx + 1},${pt.resi},"${pt.alamat}",${pt.kecamatan},${pt.lat},${pt.lng},Cluster ${pt.c_init},Cluster ${pt.c_final},${pt.status}\n`;
+          csvContent += [idx + 1, pt.resi, pt.alamat, pt.kecamatan, pt.lat, pt.lng, pt.petugas, pt.c_init == null ? '' : `Cluster ${pt.c_init}`, pt.c_final == null ? '' : `Cluster ${pt.c_final}`, pt.status].map(csvCell).join(',') + '\n';
         });
         downloadBlob(csvContent, `Hasil_Pembagian_Zona_${ds.fileName || 'GeoKurir'}.csv`, 'text/csv;charset=utf-8;');
         showToast('Hasil clustering berhasil diunduh sebagai CSV.');
@@ -1641,6 +2366,137 @@ function resetClusteringBtn() {
     });
   }
 
+
+    // ------------------------------------------------------------------------
+  // Unduh Peta - Playwright melalui Flask Backend
+  // ------------------------------------------------------------------------
+  if (btnDownloadMap) {
+    const originalButtonHtml = btnDownloadMap.innerHTML;
+
+    btnDownloadMap.addEventListener('click', async () => {
+      const ds = state.activeDatasetKey
+        ? DATASETS[state.activeDatasetKey]
+        : null;
+
+      const filenames = {
+        aktual: 'Peta_Aktual_PT_Pos.png',
+        kmeans: 'Peta_KMeans_Awal.png',
+        hbcdp: 'Peta_HBCDP_Hasil_Akhir.png'
+      };
+
+      const mode = state.zonaMode;
+      const datasetId = ds?.dbId ?? state.currentDbDatasetId;
+
+      if (!isServerMode) {
+        showToast('Unduh peta membutuhkan server Flask.', 'error');
+        return;
+      }
+
+      if (!ds?.points?.length || !datasetId) {
+        showToast('Belum ada peta untuk diunduh.', 'error');
+        return;
+      }
+
+      if (!['aktual', 'kmeans', 'hbcdp'].includes(mode)) {
+        showToast('Mode peta tidak valid.', 'error');
+        return;
+      }
+
+      btnDownloadMap.disabled = true;
+      btnDownloadMap.textContent = 'Menyiapkan Peta...';
+
+      try {
+          const map = mapManager.maps['map-zona-large'];
+
+          if (!map) {
+              throw new Error('Peta belum siap untuk diunduh.');
+          }
+
+          const center = map.getCenter();
+          const zoom = map.getZoom();
+          const mapSize = map.getSize();
+
+          const params = new URLSearchParams({
+              lat: String(center.lat),
+              lng: String(center.lng),
+              zoom: String(zoom),
+              width: String(Math.round(mapSize.x)),
+              height: String(Math.round(mapSize.y))
+          });
+
+          const response = await fetch(
+              `/api/download/map/${encodeURIComponent(datasetId)}/${encodeURIComponent(mode)}?${params.toString()}`,
+              {
+                  method: 'GET',
+                  cache: 'no-store'
+              }
+          );
+
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type') || '';
+          let message = `Gagal mengunduh peta (HTTP ${response.status}).`;
+
+          if (contentType.includes('application/json')) {
+            const result = await response.json();
+            message = result.error || result.message || message;
+          }
+
+          throw new Error(message);
+        }
+
+        const blob = await response.blob();
+
+        if (!blob.size || !blob.type.includes('image/png')) {
+          throw new Error('Server tidak mengembalikan gambar PNG yang valid.');
+        }
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+
+        link.href = url;
+        link.download = filenames[mode];
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+        showToast('Peta berhasil diunduh.');
+      } catch (error) {
+        console.error('Unduh peta gagal:', error);
+        showToast(error.message || 'Gagal mengunduh peta.', 'error');
+      } finally {
+        btnDownloadMap.disabled = false;
+        btnDownloadMap.innerHTML = originalButtonHtml;
+      }
+    });
+  }
+
+
+  // Handler tombol Lihat Proses Geocoding pada kartu Preprocessing 
+  const btnLanjutGeo = document.getElementById('btn-lanjut-geocoding');
+  if (btnLanjutGeo) {
+    btnLanjutGeo.addEventListener('click', () => {
+      const cardGeo = document.getElementById('card-geocoding');
+      if (cardGeo) {
+        cardGeo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
+
+  // Handler toggle Panduan Membaca Metrik Evaluasi 
+  const btnTogglePanduan = document.getElementById('btn-toggle-panduan-eval');
+  const panduanBody = document.getElementById('panduan-eval-body');
+  const textPanduan = document.getElementById('text-panduan-eval');
+  const arrowPanduan = document.getElementById('arrow-panduan-eval');
+  if (btnTogglePanduan && panduanBody) {
+    btnTogglePanduan.addEventListener('click', () => {
+      const isHidden = panduanBody.style.display === 'none';
+      panduanBody.style.display = isHidden ? 'grid' : 'none';
+      if (textPanduan) textPanduan.textContent = isHidden ? 'Sembunyikan' : 'Tampilkan';
+      if (arrowPanduan) arrowPanduan.textContent = isHidden ? '^' : 'v';
+    });
+  }
   // ------------------------------------------------------------------------
   // 11. Toast Helper
   // ------------------------------------------------------------------------
@@ -1693,6 +2549,7 @@ function resetClusteringBtn() {
 
 // Pastikan tombol clustering nonaktif saat website pertama dibuka
 updateClusteringButtonState();
+ensurePreprocessingProgressLabel();
 
 initRouting();
 updateDashboardView();
