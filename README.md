@@ -224,9 +224,9 @@ docker compose exec -T -e GEOKURIR_INTEGRATION_TESTS=1 web python -m unittest di
 
 | 📊 Dashboard Overview | 📤 Upload Dataset | ⚙️ Data Processing & Geocoding |
 | :---: | :---: | :---: |
-| <img src="public/dashboard.png" width="250" alt="Dashboard Overview"> | <img src="public/upload.png" width="250" alt="Upload Dataset"> | <img src="public/processing.png" width="250" alt="Data Processing and Geocoding"> |
+| <img src="public/Dashboard.png" width="250" alt="Dashboard Overview"> | <img src="public/Upload Dataset.png" width="250" alt="Upload Dataset"> | <img src="public/Data Processing and Geocoding.png" width="250" alt="Data Processing and Geocoding"> |
 | **🗺️ Delivery Zone Results** | **⚖️ Clustering Evaluation** | **🗂️ Manage Datasets** |
-| <img src="public/zones.png" width="250" alt="Delivery Zone Results"> | <img src="public/evaluation.png" width="250" alt="Clustering Evaluation"> | <img src="public/manage_dataset.png" width="250" alt="Manage Datasets"> |
+| <img src="public/Delivery Zone Results.png" width="250" alt="Delivery Zone Results"> | <img src="public/Clustering Evaluation.png" width="250" alt="Clustering Evaluation"> | <img src="public/Manage Datasets.png" width="250" alt="Manage Datasets"> |
 
 ---
 
