@@ -119,7 +119,7 @@ This research was conducted using historical parcel delivery records from **PT P
 
 ## 📚 Academic Thesis
 - **Title:** "Package Delivery Zone Allocation Based on Spatial Proximity and Courier Workload Balance Using K-Means++ and HBCDP"
-- **Indonesian Title:** "Pembagian Zona Pengantaran Paket Berdasarkan Kedekatan Spasial dan Keseimbangan Beban Kerja Kurir Menggunakan Algoritma Balanced K-Means"
+- **Indonesian Title:** "PEMBAGIAN ZONA PENGANTARAN PAKET YANG SEIMBANG BERDASARKAN KEDEKATAN SPASIAL DAN BATASAN JARAK MENGGUNAKAN K-MEANS DENGAN PENYEIMBANGAN HEURISTIK"
 - **Institution:** State Polytechnic of Malang (*Politeknik Negeri Malang*)
 - **Repository:** [GeoKurir Malang Thesis Repository](https://github.com/achmaddoli/RepoSkripsi_AchmadDoliHarahap_4J_RPL.git)
 
